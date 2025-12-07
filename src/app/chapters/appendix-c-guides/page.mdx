@@ -1,0 +1,461 @@
+# Appendix C: Migration & Style Guides
+
+Guidelines for writing clean hook code, ESLint configuration, and migration checklists.
+
+---
+
+## Hook Style Guide
+
+### Naming Conventions
+
+```tsx
+// Custom hooks: useNoun or useVerbNoun
+useUser()
+useAuth()
+useFetchData()
+useLocalStorage()
+useWindowSize()
+
+// State variables: noun or isAdjective
+const [count, setCount] = useState(0);
+const [user, setUser] = useState(null);
+const [isOpen, setIsOpen] = useState(false);
+const [isLoading, setIsLoading] = useState(true);
+const [hasError, setHasError] = useState(false);
+
+// Event handlers: handleNoun or handleVerbNoun
+const handleClick = () => {};
+const handleSubmit = () => {};
+const handleUserSelect = () => {};
+```
+
+### Hook Ordering
+
+Keep hooks in consistent order within components:
+
+```tsx
+function Component() {
+  // 1. Context hooks
+  const theme = useContext(ThemeContext);
+  const auth = useContext(AuthContext);
+
+  // 2. State hooks
+  const [count, setCount] = useState(0);
+  const [data, setData] = useState(null);
+
+  // 3. Refs
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // 4. Derived state / memoization
+  const doubledCount = useMemo(() => count * 2, [count]);
+
+  // 5. Callbacks
+  const handleClick = useCallback(() => {
+    setCount(c => c + 1);
+  }, []);
+
+  // 6. Effects (in order of importance)
+  useEffect(() => {
+    // Primary effect
+  }, []);
+
+  useEffect(() => {
+    // Secondary effect
+  }, [count]);
+
+  // 7. Return JSX
+  return <div>{count}</div>;
+}
+```
+
+### Effect Guidelines
+
+```tsx
+// ✅ Good: Clear purpose, proper cleanup
+useEffect(() => {
+  const subscription = api.subscribe(handleUpdate);
+  return () => subscription.unsubscribe();
+}, []);
+
+// ✅ Good: Dependencies match usage
+useEffect(() => {
+  fetchUser(userId).then(setUser);
+}, [userId]);
+
+// ❌ Bad: Missing dependency
+useEffect(() => {
+  fetchUser(userId).then(setUser);
+}, []); // userId missing!
+
+// ❌ Bad: Effect for derived state
+useEffect(() => {
+  setFullName(`${firstName} ${lastName}`);
+}, [firstName, lastName]);
+
+// ✅ Good: Calculate during render instead
+const fullName = `${firstName} ${lastName}`;
+```
+
+---
+
+## ESLint Configuration
+
+### Recommended Rules
+
+```json
+{
+  "plugins": ["react-hooks"],
+  "rules": {
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "warn"
+  }
+}
+```
+
+### Understanding exhaustive-deps
+
+The `exhaustive-deps` rule ensures effects re-run when dependencies change:
+
+```tsx
+// ❌ Warning: Missing dependency
+useEffect(() => {
+  fetchData(userId);
+}, []); // React Hook useEffect has a missing dependency: 'userId'
+
+// ✅ Fixed: Include dependency
+useEffect(() => {
+  fetchData(userId);
+}, [userId]);
+```
+
+### When to Suppress (Rarely)
+
+```tsx
+// Only suppress when you truly understand why
+useEffect(() => {
+  // Intentionally run only on mount
+  analytics.trackPageView();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+```
+
+**Valid suppression reasons:**
+- Intentional mount-only effect (rare)
+- Callback that shouldn't trigger re-run (consider `useEffectEvent` in React 19)
+- You've verified behavior is correct
+
+**Invalid suppression reasons:**
+- "It works without the dependency"
+- "Adding the dependency causes infinite loops" (fix the root cause)
+- "I don't understand why it's warning"
+
+---
+
+## Migration Checklists
+
+### Class to Function Component
+
+```
+□ Change class declaration to function
+□ Remove constructor, use useState initial value
+□ Convert this.state.x to individual useState calls
+□ Convert this.setState to individual setters
+□ Convert componentDidMount to useEffect(..., [])
+□ Convert componentDidUpdate to useEffect(..., [deps])
+□ Convert componentWillUnmount to useEffect cleanup
+□ Remove this.method bindings (use arrow functions or useCallback)
+□ Convert instance variables to useRef
+□ Convert getDerivedStateFromProps to useMemo or direct calculation
+□ Update any forwardRef usage
+□ Run tests, fix any broken behavior
+```
+
+### HOC to Custom Hook
+
+```
+□ Identify what the HOC provides (state, callbacks, derived values)
+□ Create hook with same functionality
+□ Return object with all values HOC injected as props
+□ Replace HOC wrapper with hook call in components
+□ Remove HOC component from codebase
+□ Update tests
+```
+
+### Render Props to Custom Hook
+
+```
+□ Identify state and callbacks in render prop component
+□ Create hook returning those values
+□ Replace render prop usage with hook call
+□ Render children directly instead of via render prop
+□ Remove render prop component
+□ Update tests
+```
+
+---
+
+## Common Patterns Cookbook
+
+### Fetch with Loading/Error
+
+```tsx
+function useFetch<T>(url: string) {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetch(url)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        if (!cancelled) {
+          setData(data);
+          setLoading(false);
+        }
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setError(err);
+          setLoading(false);
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [url]);
+
+  return { data, loading, error };
+}
+```
+
+### Debounce
+
+```tsx
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debounced;
+}
+```
+
+### Previous Value
+
+```tsx
+function usePrevious<T>(value: T): T | undefined {
+  const ref = useRef<T>();
+
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+
+  return ref.current;
+}
+```
+
+### Toggle
+
+```tsx
+function useToggle(initial = false) {
+  const [value, setValue] = useState(initial);
+
+  const toggle = useCallback(() => setValue(v => !v), []);
+  const setTrue = useCallback(() => setValue(true), []);
+  const setFalse = useCallback(() => setValue(false), []);
+
+  return [value, { toggle, setTrue, setFalse }] as const;
+}
+```
+
+### Local Storage
+
+```tsx
+function useLocalStorage<T>(key: string, initialValue: T) {
+  const [value, setValue] = useState<T>(() => {
+    if (typeof window === 'undefined') return initialValue;
+    try {
+      const item = localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // Storage full or unavailable
+    }
+  }, [key, value]);
+
+  return [value, setValue] as const;
+}
+```
+
+### Click Outside
+
+```tsx
+function useClickOutside<T extends HTMLElement>(
+  callback: () => void
+): RefObject<T> {
+  const ref = useRef<T>(null);
+
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        callback();
+      }
+    };
+
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [callback]);
+
+  return ref;
+}
+```
+
+### Media Query
+
+```tsx
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia(query).matches;
+  });
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(query);
+    const handler = (e: MediaQueryListEvent) => setMatches(e.matches);
+
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, [query]);
+
+  return matches;
+}
+```
+
+### Interval
+
+```tsx
+function useInterval(callback: () => void, delay: number | null) {
+  const savedCallback = useRef(callback);
+
+  useEffect(() => {
+    savedCallback.current = callback;
+  }, [callback]);
+
+  useEffect(() => {
+    if (delay === null) return;
+
+    const id = setInterval(() => savedCallback.current(), delay);
+    return () => clearInterval(id);
+  }, [delay]);
+}
+```
+
+---
+
+## React 19 Migration
+
+### New Hooks in React 19
+
+| Hook | Purpose | Migration |
+|------|---------|-----------|
+| `use` | Read promises/context | Replace `useContext` or manual promise handling |
+| `useActionState` | Server Action state | Replace custom form state |
+| `useFormStatus` | Form submission status | Replace `isSubmitting` state |
+| `useOptimistic` | Optimistic updates | Replace manual optimistic patterns |
+
+### Ref as Prop (React 19)
+
+```tsx
+// Before: forwardRef required
+const Input = forwardRef<HTMLInputElement, Props>((props, ref) => {
+  return <input ref={ref} {...props} />;
+});
+
+// React 19: ref is just a prop
+function Input({ ref, ...props }: Props & { ref?: Ref<HTMLInputElement> }) {
+  return <input ref={ref} {...props} />;
+}
+```
+
+### Server Components Checklist
+
+```
+□ Identify components that can be Server Components
+□ Remove 'use client' from data-fetching components
+□ Move useState/useEffect to Client Component children
+□ Use async/await for data fetching in Server Components
+□ Keep interactivity in 'use client' components
+□ Use useId for IDs (works in both)
+```
+
+---
+
+## Performance Checklist
+
+```
+□ Profile before optimizing (React DevTools)
+□ Identify slow renders (Profiler flame graph)
+□ Check if memoization would help
+□ Use useMemo for expensive calculations
+□ Use useCallback for callbacks passed to memoized children
+□ Use React.memo for expensive child components
+□ Use useTransition for non-urgent updates
+□ Use useDeferredValue for deferred values
+□ Avoid creating objects/arrays in render
+□ Consider virtualization for long lists
+□ Verify improvements with Profiler
+```
+
+---
+
+## Testing Checklist
+
+```
+□ Test initial state
+□ Test state updates via actions
+□ Test effects run at right time
+□ Test cleanup functions
+□ Test with different props
+□ Test error states
+□ Test loading states
+□ Test edge cases (empty data, null, undefined)
+□ Use act() for state updates
+□ Use waitFor for async operations
+□ Mock external dependencies
+□ Test context integration
+```
+
+---
+
+## Code Review Checklist
+
+```
+□ Hooks called at top level only
+□ Dependencies array is complete
+□ No exhaustive-deps suppressions without justification
+□ Effects have cleanup when needed
+□ No derived state in effects
+□ No state sync via effects
+□ Callbacks wrapped in useCallback when needed
+□ Expensive calculations wrapped in useMemo when needed
+□ Custom hooks follow naming convention (use*)
+□ TypeScript types are correct
+□ No any types
+□ Tests cover hook behavior
+```

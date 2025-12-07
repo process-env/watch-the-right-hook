@@ -1,0 +1,430 @@
+# useRef: Mutable Boxes with Rules
+
+`useRef` gives you a mutable container that persists across renders without triggering re-renders. It's React's escape hatch—a way to hold values that React doesn't need to know about.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Understand refs as mutable boxes outside React's control
+- Access DOM elements with refs
+- Store values that persist without causing re-renders
+- Know when to use refs vs state
+- Avoid common ref mistakes
+
+---
+
+## The Mental Model
+
+A ref is a plain JavaScript object with a `current` property:
+
+```tsx
+const ref = useRef(initialValue);
+// ref = { current: initialValue }
+
+ref.current = newValue; // Mutate directly
+console.log(ref.current); // Read directly
+```
+
+Unlike state:
+- Mutating a ref doesn't trigger a re-render
+- You can read/write it anytime (not just during render)
+- It's synchronous (no batching, no scheduling)
+
+---
+
+## DOM Refs: The Primary Use Case
+
+The most common use is accessing DOM elements:
+
+```tsx
+function TextInput() {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleClick = () => {
+    inputRef.current?.focus();
+  };
+
+  return (
+    <>
+      <input ref={inputRef} type="text" />
+      <button onClick={handleClick}>Focus Input</button>
+    </>
+  );
+}
+```
+
+React sets `ref.current` to the DOM node after mounting and back to `null` before unmounting.
+
+### Common DOM Operations
+
+```tsx
+function VideoPlayer({ src }: { src: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const play = () => videoRef.current?.play();
+  const pause = () => videoRef.current?.pause();
+  const seek = (time: number) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = time;
+    }
+  };
+
+  return (
+    <div>
+      <video ref={videoRef} src={src} />
+      <button onClick={play}>Play</button>
+      <button onClick={pause}>Pause</button>
+      <button onClick={() => seek(0)}>Restart</button>
+    </div>
+  );
+}
+```
+
+```tsx
+function ScrollToBottom() {
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  return (
+    <div>
+      {/* lots of content */}
+      <div ref={bottomRef} />
+      <button onClick={scrollToBottom}>Scroll to Bottom</button>
+    </div>
+  );
+}
+```
+
+---
+
+## Value Refs: Persisting Without Re-renders
+
+Refs can hold any value, not just DOM elements:
+
+```tsx
+function Stopwatch() {
+  const [time, setTime] = useState(0);
+  const intervalRef = useRef<number | null>(null);
+
+  const start = () => {
+    if (intervalRef.current) return; // Already running
+
+    intervalRef.current = setInterval(() => {
+      setTime(t => t + 1);
+    }, 1000);
+  };
+
+  const stop = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, []);
+
+  return (
+    <div>
+      <p>{time}s</p>
+      <button onClick={start}>Start</button>
+      <button onClick={stop}>Stop</button>
+    </div>
+  );
+}
+```
+
+### When to Use Value Refs
+
+Use refs for values that:
+- Don't affect the visual output
+- Need to persist across renders
+- Need to be accessed in event handlers or effects
+
+Common examples:
+- Timer/interval IDs
+- Previous values
+- Mutable flags (like `isMounted`)
+- Instances of third-party libraries
+
+---
+
+## Previous Value Pattern
+
+Track the previous value of props or state:
+
+```tsx
+function usePrevious<T>(value: T): T | undefined {
+  const ref = useRef<T | undefined>(undefined);
+
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+
+  return ref.current; // Returns previous value during render
+}
+
+function Counter() {
+  const [count, setCount] = useState(0);
+  const prevCount = usePrevious(count);
+
+  return (
+    <div>
+      <p>Current: {count}, Previous: {prevCount}</p>
+      <button onClick={() => setCount(c => c + 1)}>Increment</button>
+    </div>
+  );
+}
+```
+
+Why this works: The ref update happens in an effect (after render), so during render we see the old value.
+
+---
+
+## Ref vs State: When to Use Which
+
+| Need | Use |
+|------|-----|
+| Value affects what renders | State |
+| Value doesn't affect render | Ref |
+| Need to trigger re-render on change | State |
+| Need synchronous access | Ref |
+| Storing DOM reference | Ref |
+| Storing timeout/interval ID | Ref |
+| Storing mutable object | Ref |
+
+```tsx
+// ❌ Wrong: Using ref for render-affecting value
+function BadCounter() {
+  const countRef = useRef(0);
+
+  return (
+    <button onClick={() => countRef.current++}>
+      {countRef.current} {/* Never updates on screen */}
+    </button>
+  );
+}
+
+// ✅ Right: Using state for render-affecting value
+function GoodCounter() {
+  const [count, setCount] = useState(0);
+
+  return (
+    <button onClick={() => setCount(c => c + 1)}>
+      {count}
+    </button>
+  );
+}
+```
+
+---
+
+## Callback Refs
+
+For more control over when refs are set, use a callback:
+
+```tsx
+function MeasuredBox() {
+  const [height, setHeight] = useState(0);
+
+  const measuredRef = useCallback((node: HTMLDivElement | null) => {
+    if (node !== null) {
+      setHeight(node.getBoundingClientRect().height);
+    }
+  }, []);
+
+  return (
+    <div>
+      <div ref={measuredRef}>
+        Content that might change height
+      </div>
+      <p>Height: {height}px</p>
+    </div>
+  );
+}
+```
+
+Callback refs are useful when:
+- You need to run code when the ref is set
+- The element might be conditionally rendered
+- You need to measure on mount
+
+---
+
+## Refs in Lists
+
+Don't create refs in loops. Use a Map or array:
+
+```tsx
+function ImageGallery({ images }: { images: Image[] }) {
+  const imageRefs = useRef<Map<string, HTMLImageElement>>(new Map());
+
+  const scrollToImage = (id: string) => {
+    imageRefs.current.get(id)?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  return (
+    <div>
+      {images.map(image => (
+        <img
+          key={image.id}
+          ref={node => {
+            if (node) {
+              imageRefs.current.set(image.id, node);
+            } else {
+              imageRefs.current.delete(image.id);
+            }
+          }}
+          src={image.url}
+          alt={image.alt}
+        />
+      ))}
+    </div>
+  );
+}
+```
+
+---
+
+## Don't Read/Write Refs During Render
+
+Refs are escape hatches—they break React's model. Don't use them during render:
+
+```tsx
+// ❌ Wrong: Reading ref during render
+function BadComponent() {
+  const ref = useRef(0);
+  ref.current++; // Mutation during render!
+
+  return <div>{ref.current}</div>; // Reading during render!
+}
+
+// ✅ Right: Access in effects and event handlers
+function GoodComponent() {
+  const ref = useRef(0);
+
+  useEffect(() => {
+    ref.current++; // OK in effect
+  });
+
+  const handleClick = () => {
+    console.log(ref.current); // OK in event handler
+  };
+
+  return <button onClick={handleClick}>Click</button>;
+}
+```
+
+<Callout type="warning" title="Render Must Be Pure">
+Reading or writing refs during render makes your component impure. This can cause bugs with concurrent rendering and Strict Mode.
+</Callout>
+
+Exception: Lazy initialization is OK:
+
+```tsx
+function Component() {
+  const ref = useRef<ExpensiveObject | null>(null);
+
+  // OK: Only sets once, doesn't read during render for output
+  if (ref.current === null) {
+    ref.current = createExpensiveObject();
+  }
+
+  // Use ref.current in effects/handlers, not render output
+}
+```
+
+---
+
+## TypeScript with Refs
+
+```tsx
+// DOM ref (nullable because element doesn't exist initially)
+const inputRef = useRef<HTMLInputElement>(null);
+
+// Value ref (not null)
+const countRef = useRef<number>(0);
+
+// Value ref that might be null
+const timerRef = useRef<number | null>(null);
+
+// Generic hook
+function useLatest<T>(value: T) {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
+```
+
+---
+
+## Summary
+
+`useRef` provides a mutable container outside React's rendering:
+
+- **DOM refs**: Access DOM elements directly
+- **Value refs**: Store values without triggering re-renders
+- **Not for render**: Don't read/write during render
+- **Escape hatch**: Use when you need to step outside React's model
+
+<HookCard
+  name="useRef"
+  signature="const ref = useRef<T>(initialValue)"
+  description="Returns a mutable ref object that persists across renders. Mutating ref.current doesn't cause re-renders. Use for DOM access and values that don't affect rendering."
+  category="ref"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Create a component that auto-focuses an input when it mounts:
+
+```tsx
+function AutoFocusInput() {
+  // Your implementation
+}
+```
+
+### Core
+
+Build a `useInterval` hook that handles cleanup properly:
+
+```tsx
+useInterval(() => {
+  setCount(c => c + 1);
+}, 1000);
+
+// Should also support dynamic delay:
+useInterval(callback, isRunning ? 1000 : null);
+```
+
+### Stretch
+
+Create a `useClickOutside` hook:
+
+```tsx
+const ref = useClickOutside<HTMLDivElement>(() => {
+  setIsOpen(false);
+});
+
+return <div ref={ref}>Dropdown content</div>;
+```
+
+The hook should:
+- Call the callback when clicking outside the element
+- Handle multiple refs (for dropdowns with triggers)
+- Clean up event listeners properly
+- Work with portaled elements

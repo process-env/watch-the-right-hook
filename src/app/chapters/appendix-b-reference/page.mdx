@@ -1,0 +1,417 @@
+# Appendix B: Hook Reference Cards
+
+Quick reference for every React hook with signature, behavior, and gotchas.
+
+---
+
+## State Hooks
+
+### useState
+
+```tsx
+const [state, setState] = useState(initialState);
+const [state, setState] = useState(() => computeInitialState());
+```
+
+**Behavior:**
+- Returns current state and setter function
+- Setter can take new value or updater function
+- Initial state is only used on first render
+- Lazy initializer function runs once
+
+**Gotchas:**
+- State updates are batched in React 18+
+- Setter identity is stable (won't change)
+- Object/array updates need new reference: `setState({...state, key: value})`
+
+---
+
+### useReducer
+
+```tsx
+const [state, dispatch] = useReducer(reducer, initialArg);
+const [state, dispatch] = useReducer(reducer, initialArg, init);
+```
+
+**Behavior:**
+- `reducer(state, action)` returns new state
+- `dispatch(action)` triggers reducer
+- Optional `init` function for lazy initialization
+
+**Gotchas:**
+- Reducer must be pure (no side effects)
+- Dispatch identity is stable
+- Good for complex state transitions
+
+---
+
+### useSyncExternalStore
+
+```tsx
+const snapshot = useSyncExternalStore(subscribe, getSnapshot);
+const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+```
+
+**Behavior:**
+- Subscribes to external store
+- Re-renders when snapshot changes
+- `getServerSnapshot` for SSR
+
+**Gotchas:**
+- `getSnapshot` must return immutable value
+- `subscribe` should return unsubscribe function
+- Snapshot comparison uses `Object.is`
+
+---
+
+### useOptimistic
+
+```tsx
+const [optimisticState, addOptimistic] = useOptimistic(state, updateFn);
+```
+
+**Behavior:**
+- Shows optimistic value during async operation
+- Reverts to actual state when action completes
+- `updateFn(currentState, optimisticValue)` returns optimistic state
+
+**Gotchas:**
+- React 19+ only
+- Automatically reverts on action completion
+- Use inside transitions or form actions
+
+---
+
+### useActionState
+
+```tsx
+const [state, formAction, isPending] = useActionState(action, initialState);
+```
+
+**Behavior:**
+- Wraps Server Action with state management
+- Returns current state, wrapped action, and pending boolean
+- State updates when action completes
+
+**Gotchas:**
+- React 19+ only
+- Works with `<form action={formAction}>`
+- `isPending` is true during submission
+
+---
+
+## Context Hooks
+
+### useContext
+
+```tsx
+const value = useContext(SomeContext);
+```
+
+**Behavior:**
+- Reads current context value
+- Re-renders when context value changes
+- Finds nearest Provider above in tree
+
+**Gotchas:**
+- Returns `undefined` if no Provider (or default value)
+- All consumers re-render when value changes
+- Memoize context value to prevent unnecessary renders
+
+---
+
+### use
+
+```tsx
+const value = use(Context);
+const data = use(promise);
+```
+
+**Behavior:**
+- Reads context or awaits promise
+- Can be called conditionally (unlike other hooks)
+- Suspends component while promise resolves
+
+**Gotchas:**
+- React 19+ only
+- Promise must be created outside render (or cached)
+- Works in Server and Client Components
+
+---
+
+## Effect Hooks
+
+### useEffect
+
+```tsx
+useEffect(() => {
+  // Effect
+  return () => { /* Cleanup */ };
+}, [dependencies]);
+```
+
+**Behavior:**
+- Runs after render and paint
+- Cleanup runs before next effect and on unmount
+- Empty deps `[]` = mount only
+- No deps = every render
+
+**Gotchas:**
+- Don't lie about dependencies
+- Runs twice in Strict Mode (development)
+- Not for computed values (use `useMemo`)
+
+---
+
+### useLayoutEffect
+
+```tsx
+useLayoutEffect(() => {
+  // Effect (before paint)
+  return () => { /* Cleanup */ };
+}, [dependencies]);
+```
+
+**Behavior:**
+- Same as useEffect but runs before browser paint
+- Blocks visual updates until complete
+- Use for DOM measurements
+
+**Gotchas:**
+- Can hurt performance if slow
+- SSR warning (use `useEffect` with check)
+- Prefer `useEffect` unless you need layout
+
+---
+
+### useInsertionEffect
+
+```tsx
+useInsertionEffect(() => {
+  // Insert styles
+}, [dependencies]);
+```
+
+**Behavior:**
+- Runs before DOM mutations
+- For CSS-in-JS libraries only
+- No cleanup function access to DOM
+
+**Gotchas:**
+- Very specialized use case
+- Can't access refs
+- Library authors only
+
+---
+
+## Ref Hooks
+
+### useRef
+
+```tsx
+const ref = useRef(initialValue);
+// ref.current = value
+```
+
+**Behavior:**
+- Returns mutable object with `.current` property
+- Persists across renders
+- Mutations don't trigger re-render
+
+**Gotchas:**
+- Don't read/write during render
+- DOM refs are `null` initially
+- Use for values that don't affect output
+
+---
+
+### useImperativeHandle
+
+```tsx
+useImperativeHandle(ref, () => ({
+  method1() { /* ... */ },
+  method2() { /* ... */ },
+}), [dependencies]);
+```
+
+**Behavior:**
+- Customizes ref value exposed to parent
+- Use with `forwardRef`
+- Limits what parent can access
+
+**Gotchas:**
+- Prefer declarative patterns when possible
+- Good for focus, scroll, media controls
+- React 19: Can use `ref` as prop directly
+
+---
+
+## Performance Hooks
+
+### useMemo
+
+```tsx
+const memoizedValue = useMemo(() => computeExpensive(a, b), [a, b]);
+```
+
+**Behavior:**
+- Caches computation result
+- Recomputes when dependencies change
+- Returns cached value otherwise
+
+**Gotchas:**
+- Don't use for cheap calculations
+- React may discard cache (not guaranteed)
+- React Compiler will automate this
+
+---
+
+### useCallback
+
+```tsx
+const memoizedFn = useCallback(() => {
+  doSomething(a, b);
+}, [a, b]);
+```
+
+**Behavior:**
+- Caches function definition
+- Same as `useMemo(() => fn, deps)`
+- Returns same function if deps unchanged
+
+**Gotchas:**
+- Only helps if passed to memoized child
+- Include all values used inside
+- React Compiler will automate this
+
+---
+
+### useTransition
+
+```tsx
+const [isPending, startTransition] = useTransition();
+```
+
+**Behavior:**
+- Marks state updates as non-urgent
+- UI stays responsive during heavy renders
+- `isPending` true while transition in progress
+
+**Gotchas:**
+- Can't wrap controlled input updates
+- Transition can be interrupted
+- For CPU-bound work, not network
+
+---
+
+### useDeferredValue
+
+```tsx
+const deferredValue = useDeferredValue(value);
+```
+
+**Behavior:**
+- Defers updating value until urgent work done
+- Old value shown while new value renders
+- Compare with current to detect stale
+
+**Gotchas:**
+- Value must be primitive or memoized object
+- Use when you don't control the state update
+- Simpler than `useTransition` for some cases
+
+---
+
+## Other Hooks
+
+### useId
+
+```tsx
+const id = useId();
+```
+
+**Behavior:**
+- Generates unique ID stable across server/client
+- Same ID on every render
+- Works with SSR and streaming
+
+**Gotchas:**
+- Don't use for list keys
+- Don't use for CSS selectors
+- Derive multiple IDs: `${id}-label`, `${id}-input`
+
+---
+
+### useFormStatus
+
+```tsx
+const { pending, data, method, action } = useFormStatus();
+```
+
+**Behavior:**
+- Returns status of parent `<form>`
+- `pending` is true during submission
+- Must be used inside form's children
+
+**Gotchas:**
+- React 19+ only
+- Won't work in same component as `<form>`
+- For showing loading states in submit buttons
+
+---
+
+### useDebugValue
+
+```tsx
+useDebugValue(value);
+useDebugValue(value, formatFn);
+```
+
+**Behavior:**
+- Labels custom hooks in React DevTools
+- Optional format function for expensive formatting
+- Development only
+
+**Gotchas:**
+- No runtime effect
+- Only in custom hooks
+- Use sparingly
+
+---
+
+## Hook Rules Summary
+
+1. **Only call at top level** - Not in loops, conditions, or nested functions
+2. **Only call in React functions** - Components or custom hooks
+3. **Start with "use"** - Custom hooks must start with `use`
+4. **Same order every render** - React tracks hooks by call order
+
+---
+
+## TypeScript Patterns
+
+```tsx
+// useState with explicit type
+const [user, setUser] = useState<User | null>(null);
+
+// useRef for DOM
+const inputRef = useRef<HTMLInputElement>(null);
+
+// useRef for mutable value
+const countRef = useRef<number>(0);
+
+// useReducer with discriminated union
+type Action =
+  | { type: 'increment' }
+  | { type: 'set'; value: number };
+
+const [state, dispatch] = useReducer(reducer, initialState);
+
+// useContext with non-null assertion (when provider guaranteed)
+const value = useContext(MyContext)!;
+
+// Generic custom hook
+function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
+  // ...
+}
+```

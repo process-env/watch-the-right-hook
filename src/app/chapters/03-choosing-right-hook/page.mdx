@@ -1,0 +1,363 @@
+# Choosing the Right Hook
+
+React has 15+ built-in hooks. When you're staring at a problem, how do you know which one to reach for? This chapter gives you a decision framework.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Use the RIGHT framework to select hooks systematically
+- Know which hook handles which category of problem
+- Understand when to combine hooks vs. use a single hook
+- Recognize when you need a custom hook
+
+---
+
+## The RIGHT Framework
+
+When choosing a hook, ask yourself five questions:
+
+**R** - **Render**: Does this value affect what gets rendered?
+**I** - **Identity**: Does this value need to persist across renders?
+**G** - **Global**: Is this value shared across components?
+**H** - **Handler**: Is this triggered by an event or side effect?
+**T** - **Timing**: When does this need to run?
+
+Let's see how each question points to specific hooks.
+
+---
+
+## R: Does It Affect Render?
+
+If changing this value should update the UI, you need state.
+
+| Answer | Hook |
+|--------|------|
+| Yes, simple value | `useState` |
+| Yes, complex updates | `useReducer` |
+| Yes, from external source | `useSyncExternalStore` |
+| No | `useRef` |
+
+```tsx
+// YES: Count affects what we display
+const [count, setCount] = useState(0);
+
+// NO: Timer ID doesn't affect display
+const timerRef = useRef<number | null>(null);
+```
+
+<Callout type="tip" title="The Ref Test">
+If you could delete the variable and the UI would look the same, it's probably a ref, not state.
+</Callout>
+
+---
+
+## I: Does It Persist Across Renders?
+
+Some values need to survive re-renders. Others are computed fresh each time.
+
+| Answer | Hook |
+|--------|------|
+| Yes, and triggers re-render | `useState` / `useReducer` |
+| Yes, but no re-render | `useRef` |
+| No, compute each render | No hook (just a variable) |
+| No, but expensive to compute | `useMemo` |
+
+```tsx
+function ProductList({ products, filter }) {
+  // Persists, triggers re-render
+  const [sortOrder, setSortOrder] = useState('asc');
+
+  // Persists, no re-render needed
+  const prevFilter = useRef(filter);
+
+  // Computed fresh each render (cheap)
+  const hasProducts = products.length > 0;
+
+  // Computed fresh but cached (expensive)
+  const filtered = useMemo(
+    () => products.filter(p => p.name.includes(filter)),
+    [products, filter]
+  );
+}
+```
+
+---
+
+## G: Is It Shared Across Components?
+
+If multiple components need the same value, you need to lift it up or use context.
+
+| Scope | Hook |
+|-------|------|
+| Single component | `useState` / `useReducer` |
+| Parent and children (prop drilling ok) | Pass as props |
+| Many components, deep tree | `useContext` |
+| External store (Redux, Zustand) | `useSyncExternalStore` |
+
+```tsx
+// Single component - local state
+function Counter() {
+  const [count, setCount] = useState(0);
+}
+
+// Shared via context
+const ThemeContext = createContext('light');
+
+function App() {
+  const [theme, setTheme] = useState('light');
+  return (
+    <ThemeContext.Provider value={theme}>
+      <Page />
+    </ThemeContext.Provider>
+  );
+}
+
+function Button() {
+  const theme = useContext(ThemeContext);
+}
+```
+
+---
+
+## H: Is It Triggered by Events or Side Effects?
+
+How the value changes determines which hook manages it.
+
+| Trigger | Hook |
+|---------|------|
+| User interaction (click, type) | `useState` setter in handler |
+| Form submission | `useActionState` |
+| External system (WebSocket, timer) | `useEffect` + `useState` |
+| Optimistic update | `useOptimistic` |
+| DOM measurement | `useLayoutEffect` + `useRef` |
+
+```tsx
+// User interaction
+function Form() {
+  const [name, setName] = useState('');
+  return <input value={name} onChange={e => setName(e.target.value)} />;
+}
+
+// External system
+function Clock() {
+  const [time, setTime] = useState(new Date());
+
+  useEffect(() => {
+    const id = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  return <div>{time.toLocaleTimeString()}</div>;
+}
+
+// Form submission with action
+function SubmitForm() {
+  const [state, action, pending] = useActionState(submitToServer, null);
+  return (
+    <form action={action}>
+      <button disabled={pending}>Submit</button>
+    </form>
+  );
+}
+```
+
+---
+
+## T: When Does It Need to Run?
+
+Timing determines which effect hook to use.
+
+| Timing | Hook |
+|--------|------|
+| After paint (most cases) | `useEffect` |
+| Before paint (DOM measurements) | `useLayoutEffect` |
+| Before any DOM updates (CSS-in-JS) | `useInsertionEffect` |
+| On every render (no cleanup) | Just run it in the component |
+
+```tsx
+function Tooltip({ targetRef }) {
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+
+  // Must measure DOM before paint to avoid flicker
+  useLayoutEffect(() => {
+    const rect = targetRef.current.getBoundingClientRect();
+    setPosition({ x: rect.left, y: rect.bottom });
+  }, [targetRef]);
+
+  return <div style={{ left: position.x, top: position.y }}>Tooltip</div>;
+}
+```
+
+<Callout type="warning" title="Default to useEffect">
+Start with `useEffect`. Only switch to `useLayoutEffect` if you see visual glitches from measuring/mutating the DOM.
+</Callout>
+
+---
+
+## The Hook Selection Flowchart
+
+```
+START: What are you trying to do?
+│
+├─► Store a value that affects UI?
+│   ├─► Simple value → useState
+│   ├─► Complex state logic → useReducer
+│   └─► From external store → useSyncExternalStore
+│
+├─► Store a value that doesn't affect UI?
+│   └─► useRef
+│
+├─► Share data across components?
+│   ├─► Few levels → props
+│   └─► Many levels → useContext
+│
+├─► Run code after render?
+│   ├─► After paint → useEffect
+│   ├─► Before paint → useLayoutEffect
+│   └─► CSS injection → useInsertionEffect
+│
+├─► Optimize performance?
+│   ├─► Cache computed value → useMemo
+│   ├─► Cache function → useCallback
+│   └─► Defer non-urgent update → useDeferredValue / useTransition
+│
+├─► Handle forms?
+│   ├─► Track submission state → useActionState
+│   ├─► Check pending in children → useFormStatus
+│   └─► Optimistic UI → useOptimistic
+│
+└─► Generate stable IDs?
+    └─► useId
+```
+
+---
+
+## When to Create Custom Hooks
+
+Create a custom hook when:
+
+1. **You're repeating the same hook combination** in multiple components
+2. **The logic has a clear name** that describes what it does
+3. **You want to test the logic** separately from UI
+
+```tsx
+// Before: Repeated in every component that fetches data
+function UserProfile({ userId }) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchUser(userId)
+      .then(setUser)
+      .catch(setError)
+      .finally(() => setLoading(false));
+  }, [userId]);
+
+  // ...
+}
+
+// After: Extracted to custom hook
+function useUser(userId) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchUser(userId)
+      .then(setUser)
+      .catch(setError)
+      .finally(() => setLoading(false));
+  }, [userId]);
+
+  return { user, loading, error };
+}
+
+function UserProfile({ userId }) {
+  const { user, loading, error } = useUser(userId);
+  // ...
+}
+```
+
+---
+
+## Quick Reference Table
+
+| I need to... | Use this hook |
+|--------------|---------------|
+| Store UI state | `useState` |
+| Store complex state | `useReducer` |
+| Store non-UI value | `useRef` |
+| Access DOM element | `useRef` |
+| Share state deeply | `useContext` |
+| Sync with external store | `useSyncExternalStore` |
+| Run side effect | `useEffect` |
+| Measure DOM before paint | `useLayoutEffect` |
+| Cache expensive calculation | `useMemo` |
+| Cache function reference | `useCallback` |
+| Handle form submission | `useActionState` |
+| Show optimistic state | `useOptimistic` |
+| Check form pending state | `useFormStatus` |
+| Mark update as non-urgent | `useTransition` |
+| Defer a value | `useDeferredValue` |
+| Generate stable ID | `useId` |
+| Read promise/context | `use` |
+
+---
+
+## Summary
+
+The RIGHT framework helps you choose hooks systematically:
+
+- **R**ender: Does it affect UI? → State vs Ref
+- **I**dentity: Does it persist? → Hook vs variable
+- **G**lobal: Is it shared? → Context vs local
+- **H**andler: What triggers it? → Effect vs event handler
+- **T**iming: When does it run? → Which effect hook
+
+When in doubt, start simple (`useState`, `useEffect`) and refactor to more specific hooks as needed.
+
+<HookCard
+  name="RIGHT Framework"
+  signature="Render → Identity → Global → Handler → Timing"
+  description="Five questions that guide you to the right hook. Start with R and work down until you find your answer."
+  category="state"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+For each scenario, identify which hook(s) you'd use:
+
+1. Track whether a modal is open
+2. Store a reference to a video element for calling `.play()`
+3. Subscribe to window resize events
+4. Cache a filtered list that's expensive to compute
+5. Share user authentication state across the app
+
+### Core
+
+Build a `useLocalStorage` hook that:
+- Syncs state with localStorage
+- Works like `useState` but persists
+- Handles the case where localStorage isn't available (SSR)
+
+```tsx
+const [name, setName] = useLocalStorage('name', 'Guest');
+```
+
+### Stretch
+
+Create a `useFetch` hook that:
+- Takes a URL and returns `{ data, loading, error }`
+- Cancels the request if the component unmounts
+- Refetches when the URL changes
+- Optionally accepts a `skip` parameter to conditionally skip fetching
+
+Decide which hooks you need using the RIGHT framework before implementing.

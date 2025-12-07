@@ -1,0 +1,421 @@
+@import "tailwindcss";
+
+/**
+ * Royal Tenenbaums Theme
+ * A Wes Anderson-inspired design system
+ */
+
+:root {
+  /* Primary Palette (from the film) */
+  --tenenbaum-red: #8B2500;
+  --tenenbaum-camel: #D4A574;
+  --tenenbaum-cream: #FFF8E7;
+  --tenenbaum-brown: #5D4037;
+  --tenenbaum-sage: #A7BA42;
+  --tenenbaum-mustard: #C9A227;
+  --tenenbaum-headband: #E8D4B8;
+  --tenenbaum-dark: #1A1A1A;
+
+  /* Semantic Colors */
+  --background: #FFF8E7;
+  --surface: #FDFBF7;
+  --foreground: #5D4037;
+  --text: #5D4037;
+  --text-muted: #6B5B4F; /* Darkened for WCAG AA compliance (4.6:1 contrast) */
+  --border: #D4A574;
+  --accent: #8B2500;
+
+  /* Hook Category Colors */
+  --hook-state: #8B2500;
+  --hook-effect: #A7BA42;
+  --hook-ref: #5D4037;
+  --hook-context: #C9A227;
+  --hook-performance: #D4A574;
+  --hook-form: #E8D4B8;
+
+  /* Typography */
+  --font-display: var(--font-playfair), Georgia, serif;
+  --font-heading: var(--font-futura), "Century Gothic", sans-serif;
+  --font-body: var(--font-crimson), Georgia, serif;
+  --font-mono: var(--font-ibm-plex), "Courier New", monospace;
+
+  /* Spacing */
+  --spacing-symmetrical: 2rem;
+  --spacing-gutter: 3rem;
+  --spacing-ornament: 1.5rem;
+
+  /* Borders */
+  --border-frame: 3px double var(--border);
+  --border-ornate: 2px solid var(--border);
+  --border-subtle: 1px solid var(--border);
+  --border-radius: 2px;
+}
+
+@theme inline {
+  /* Colors */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: #FDFBF7;
+  --color-accent: var(--accent);
+  --color-border: var(--border);
+  --color-muted: var(--text-muted);
+
+  /* Tenenbaum Palette - Direct values for Tailwind utilities */
+  --color-tenenbaum-red: #8B2500;
+  --color-tenenbaum-camel: #D4A574;
+  --color-tenenbaum-cream: #FFF8E7;
+  --color-tenenbaum-brown: #5D4037;
+  --color-tenenbaum-sage: #A7BA42;
+  --color-tenenbaum-mustard: #C9A227;
+  --color-tenenbaum-headband: #E8D4B8;
+  --color-tenenbaum-dark: #1A1A1A;
+
+  /* Hook Categories */
+  --color-hook-state: #8B2500;
+  --color-hook-effect: #A7BA42;
+  --color-hook-ref: #5D4037;
+  --color-hook-context: #C9A227;
+  --color-hook-performance: #D4A574;
+  --color-hook-form: #E8D4B8;
+
+  /* Fonts */
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+/* Base Styles */
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body);
+  line-height: 1.7;
+  letter-spacing: 0.01em;
+}
+
+/* Typography Scale */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  color: var(--tenenbaum-brown);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+h1 {
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+h2 {
+  font-size: 1.75rem;
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+}
+
+h3 {
+  font-size: 1.375rem;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+/* ===========================================
+   VINTAGE 8-BIT CRT TERMINAL CODE BLOCKS
+   Phosphor green on dark - WCAG AA compliant
+   Contrast ratio: 10.5:1
+   =========================================== */
+
+:root {
+  --crt-bg: #0D1A0D;
+  --crt-text: #33FF33;
+  --crt-dim: #1A3D1A;
+  --crt-glow: rgba(51, 255, 51, 0.5);
+}
+
+pre, code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+pre {
+  background: var(--crt-bg);
+  color: var(--crt-text);
+  border: 3px solid var(--crt-dim);
+  border-radius: 4px;
+  padding: 1.5rem;
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+
+  /* CRT glow effect */
+  box-shadow:
+    inset 0 0 80px rgba(51, 255, 51, 0.08),
+    0 0 30px rgba(51, 255, 51, 0.03);
+}
+
+/* Scanlines overlay */
+pre::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.12) 2px,
+    rgba(0, 0, 0, 0.12) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* CRT curvature vignette */
+pre::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 50%,
+    rgba(0, 0, 0, 0.25) 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  text-shadow: 0 0 8px var(--crt-glow);
+  position: relative;
+  z-index: 3;
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* Inline code - warm Tenenbaum style (NOT CRT) */
+code:not(pre code) {
+  background: var(--tenenbaum-headband);
+  color: var(--tenenbaum-red);
+  padding: 0.2em 0.5em;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-family: var(--font-mono);
+  border: 1px solid var(--tenenbaum-camel);
+}
+
+/* Links */
+a {
+  color: var(--tenenbaum-red);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s ease;
+}
+
+a:hover {
+  border-bottom-color: var(--tenenbaum-red);
+}
+
+/* Selection */
+::selection {
+  background: var(--tenenbaum-camel);
+  color: var(--tenenbaum-dark);
+}
+
+/* Scrollbar (Webkit) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--tenenbaum-cream);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--tenenbaum-camel);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--tenenbaum-brown);
+}
+
+/* Decorative Utilities */
+.ornament-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin: 2rem 0;
+  color: var(--tenenbaum-camel);
+}
+
+.ornament-divider::before,
+.ornament-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--tenenbaum-camel);
+}
+
+.frame-double {
+  border: var(--border-frame);
+  padding: var(--spacing-ornament);
+}
+
+.frame-ornate {
+  border: var(--border-ornate);
+  padding: var(--spacing-ornament);
+  position: relative;
+}
+
+/* Chapter Plate Style */
+.chapter-plate {
+  text-align: center;
+  padding: 2rem;
+  border: 3px double var(--tenenbaum-camel);
+  background: var(--surface);
+  margin-bottom: 2rem;
+}
+
+.chapter-plate h1 {
+  margin: 0;
+  font-variant: small-caps;
+  letter-spacing: 0.1em;
+}
+
+/* Paper Texture Overlay (subtle) */
+.paper-texture {
+  position: relative;
+}
+
+.paper-texture::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ===========================================
+   MDX PROSE STYLES
+   Tenenbaum-themed content styling
+   =========================================== */
+
+.prose-tenenbaum {
+  /* Paragraphs */
+  & p {
+    margin-bottom: 1.25em;
+    line-height: 1.8;
+  }
+
+  /* Lists */
+  & ul, & ol {
+    margin: 1.5em 0;
+    padding-left: 1.5em;
+  }
+
+  & li {
+    margin-bottom: 0.5em;
+    line-height: 1.7;
+  }
+
+  & ul li::marker {
+    color: var(--tenenbaum-camel);
+  }
+
+  & ol li::marker {
+    color: var(--tenenbaum-red);
+    font-weight: 600;
+  }
+
+  /* Headings spacing */
+  & h1 {
+    margin-top: 0;
+    margin-bottom: 2.5rem;
+    text-align: center;
+    padding-bottom: 1.5rem;
+    border-bottom: 2px solid var(--tenenbaum-camel);
+  }
+
+  & h2 {
+    margin-top: 3rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--tenenbaum-camel);
+  }
+
+  & h3 {
+    margin-top: 2rem;
+    margin-bottom: 0.75rem;
+  }
+
+  /* Strong emphasis */
+  & strong {
+    color: var(--tenenbaum-brown);
+    font-weight: 700;
+  }
+
+  /* Blockquotes */
+  & blockquote {
+    border-left: 4px solid var(--tenenbaum-camel);
+    padding-left: 1.25em;
+    margin: 1.5em 0;
+    font-style: italic;
+    color: var(--text-muted);
+    background: var(--surface);
+    padding: 1em 1.25em;
+  }
+
+  /* Code blocks */
+  & pre {
+    margin: 1.5em 0;
+  }
+
+  /* Horizontal rules */
+  & hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--tenenbaum-camel) 20%,
+      var(--tenenbaum-camel) 80%,
+      transparent
+    );
+    margin: 3rem 0;
+  }
+
+  /* Tables */
+  & table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5em 0;
+  }
+
+  & th {
+    background: var(--surface);
+    border: 1px solid var(--tenenbaum-camel);
+    padding: 0.75em 1em;
+    text-align: left;
+    font-weight: 600;
+    color: var(--tenenbaum-brown);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+  }
+
+  & td {
+    border: 1px solid var(--tenenbaum-camel);
+    padding: 0.75em 1em;
+  }
+
+  & tr:nth-child(even) {
+    background: var(--surface);
+  }
+}

@@ -1,0 +1,915 @@
+# From Legacy to Modern: Classes, HOCs, and Mixins
+
+React has evolved. Class components, Higher-Order Components (HOCs), render props, and mixins were once standard patterns. Hooks replaced them—but legacy code still exists. This chapter shows how to migrate from old patterns to hooks.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Understand why React moved from classes to hooks
+- Convert class components to function components
+- Replace HOCs with custom hooks
+- Migrate render props to hooks
+- Handle legacy lifecycle methods
+
+---
+
+## Why Hooks Replaced Classes
+
+Classes had problems that hooks solve:
+
+| Class Problem | Hook Solution |
+|--------------|---------------|
+| `this` binding confusion | No `this` needed |
+| Lifecycle methods split related logic | Effects group by concern |
+| Hard to share stateful logic | Custom hooks compose naturally |
+| Verbose syntax | Concise function components |
+| Hard to optimize | Better for tree shaking and minification |
+
+```tsx
+// Class: Related logic is split
+class UserProfile extends React.Component {
+  componentDidMount() {
+    this.fetchUser();
+    this.subscribeToNotifications();
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.userId !== this.props.userId) {
+      this.fetchUser();
+    }
+  }
+
+  componentWillUnmount() {
+    this.unsubscribeFromNotifications();
+  }
+
+  // Logic for user and notifications is scattered
+}
+
+// Hooks: Related logic is together
+function UserProfile({ userId }) {
+  // User fetching logic together
+  useEffect(() => {
+    fetchUser(userId);
+  }, [userId]);
+
+  // Notification logic together
+  useEffect(() => {
+    const unsubscribe = subscribeToNotifications();
+    return () => unsubscribe();
+  }, []);
+}
+```
+
+---
+
+## Converting Class Components
+
+### Basic State Conversion
+
+```tsx
+// Class
+class Counter extends React.Component {
+  state = { count: 0 };
+
+  increment = () => {
+    this.setState(prev => ({ count: prev.count + 1 }));
+  };
+
+  render() {
+    return (
+      <button onClick={this.increment}>
+        Count: {this.state.count}
+      </button>
+    );
+  }
+}
+
+// Function with Hooks
+function Counter() {
+  const [count, setCount] = useState(0);
+
+  const increment = () => {
+    setCount(prev => prev + 1);
+  };
+
+  return (
+    <button onClick={increment}>
+      Count: {count}
+    </button>
+  );
+}
+```
+
+### Multiple State Fields
+
+```tsx
+// Class: Single state object
+class Form extends React.Component {
+  state = {
+    name: '',
+    email: '',
+    age: 0,
+    isSubmitting: false,
+  };
+
+  handleChange = (field) => (e) => {
+    this.setState({ [field]: e.target.value });
+  };
+}
+
+// Hooks: Can split or keep together
+
+// Option 1: Separate useState calls (preferred for unrelated state)
+function Form() {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [age, setAge] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+}
+
+// Option 2: useReducer for related state
+function Form() {
+  const [state, dispatch] = useReducer(formReducer, {
+    name: '',
+    email: '',
+    age: 0,
+    isSubmitting: false,
+  });
+}
+```
+
+### Lifecycle Methods
+
+```tsx
+// Class
+class DataFetcher extends React.Component {
+  state = { data: null, loading: true };
+
+  componentDidMount() {
+    this.fetchData();
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.id !== this.props.id) {
+      this.fetchData();
+    }
+  }
+
+  componentWillUnmount() {
+    this.cancelled = true;
+  }
+
+  fetchData = async () => {
+    this.setState({ loading: true });
+    const data = await fetchById(this.props.id);
+    if (!this.cancelled) {
+      this.setState({ data, loading: false });
+    }
+  };
+
+  render() {
+    // ...
+  }
+}
+
+// Hooks
+function DataFetcher({ id }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setLoading(true);
+    fetchById(id).then(data => {
+      if (!cancelled) {
+        setData(data);
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]); // Handles mount AND update when id changes
+
+  // ...
+}
+```
+
+### Instance Variables (Refs)
+
+```tsx
+// Class: Instance variables
+class VideoPlayer extends React.Component {
+  videoRef = React.createRef();
+  intervalId = null;
+
+  play = () => {
+    this.videoRef.current.play();
+    this.intervalId = setInterval(this.updateProgress, 100);
+  };
+
+  componentWillUnmount() {
+    clearInterval(this.intervalId);
+  }
+}
+
+// Hooks: useRef for instance variables
+function VideoPlayer() {
+  const videoRef = useRef(null);
+  const intervalIdRef = useRef(null);
+
+  const play = () => {
+    videoRef.current.play();
+    intervalIdRef.current = setInterval(updateProgress, 100);
+  };
+
+  useEffect(() => {
+    return () => {
+      clearInterval(intervalIdRef.current);
+    };
+  }, []);
+}
+```
+
+### getDerivedStateFromProps
+
+```tsx
+// Class
+class Derived extends React.Component {
+  state = { prevItems: [], processedItems: [] };
+
+  static getDerivedStateFromProps(props, state) {
+    if (props.items !== state.prevItems) {
+      return {
+        prevItems: props.items,
+        processedItems: props.items.map(process),
+      };
+    }
+    return null;
+  }
+}
+
+// Hooks: Usually just calculate during render
+function Derived({ items }) {
+  // No need for state at all!
+  const processedItems = useMemo(() => items.map(process), [items]);
+
+  return <List items={processedItems} />;
+}
+```
+
+### getSnapshotBeforeUpdate
+
+```tsx
+// Class
+class ScrollingList extends React.Component {
+  listRef = React.createRef();
+
+  getSnapshotBeforeUpdate(prevProps) {
+    if (prevProps.items.length < this.props.items.length) {
+      return this.listRef.current.scrollHeight;
+    }
+    return null;
+  }
+
+  componentDidUpdate(prevProps, prevState, snapshot) {
+    if (snapshot !== null) {
+      const list = this.listRef.current;
+      list.scrollTop = list.scrollHeight - snapshot;
+    }
+  }
+}
+
+// Hooks: useLayoutEffect (runs synchronously after DOM update)
+function ScrollingList({ items }) {
+  const listRef = useRef(null);
+  const prevItemsLengthRef = useRef(items.length);
+  const prevScrollHeightRef = useRef(0);
+
+  // Capture scroll height before update
+  useLayoutEffect(() => {
+    prevScrollHeightRef.current = listRef.current?.scrollHeight ?? 0;
+  });
+
+  // Adjust scroll after update
+  useLayoutEffect(() => {
+    if (prevItemsLengthRef.current < items.length) {
+      const list = listRef.current;
+      if (list) {
+        list.scrollTop = list.scrollHeight - prevScrollHeightRef.current;
+      }
+    }
+    prevItemsLengthRef.current = items.length;
+  }, [items.length]);
+
+  return <ul ref={listRef}>...</ul>;
+}
+```
+
+---
+
+## Replacing Higher-Order Components
+
+HOCs wrap components to add functionality. Hooks provide the same functionality more directly.
+
+### Authentication HOC
+
+```tsx
+// HOC
+function withAuth(WrappedComponent) {
+  return class extends React.Component {
+    state = { user: null, loading: true };
+
+    componentDidMount() {
+      checkAuth().then(user => this.setState({ user, loading: false }));
+    }
+
+    render() {
+      if (this.state.loading) return <Spinner />;
+      if (!this.state.user) return <Redirect to="/login" />;
+
+      return <WrappedComponent {...this.props} user={this.state.user} />;
+    }
+  };
+}
+
+// Usage
+const ProtectedProfile = withAuth(Profile);
+
+// Hook replacement
+function useAuth() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    checkAuth().then(setUser).finally(() => setLoading(false));
+  }, []);
+
+  return { user, loading, isAuthenticated: !!user };
+}
+
+// Usage
+function Profile() {
+  const { user, loading, isAuthenticated } = useAuth();
+
+  if (loading) return <Spinner />;
+  if (!isAuthenticated) return <Navigate to="/login" />;
+
+  return <ProfileContent user={user} />;
+}
+```
+
+### Data Fetching HOC
+
+```tsx
+// HOC
+function withData(WrappedComponent, fetchData) {
+  return class extends React.Component {
+    state = { data: null, loading: true, error: null };
+
+    componentDidMount() {
+      this.loadData();
+    }
+
+    loadData = async () => {
+      try {
+        const data = await fetchData(this.props);
+        this.setState({ data, loading: false });
+      } catch (error) {
+        this.setState({ error, loading: false });
+      }
+    };
+
+    render() {
+      return (
+        <WrappedComponent
+          {...this.props}
+          data={this.state.data}
+          loading={this.state.loading}
+          error={this.state.error}
+          refetch={this.loadData}
+        />
+      );
+    }
+  };
+}
+
+// Hook replacement
+function useFetch<T>(fetchFn: () => Promise<T>) {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await fetchFn();
+      setData(result);
+      setError(null);
+    } catch (e) {
+      setError(e as Error);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchFn]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  return { data, loading, error, refetch: fetchData };
+}
+
+// Usage: More explicit, easier to understand
+function UserList() {
+  const { data: users, loading, error } = useFetch(fetchUsers);
+
+  if (loading) return <Spinner />;
+  if (error) return <Error message={error.message} />;
+  return <List items={users} />;
+}
+```
+
+### Multiple HOCs
+
+```tsx
+// HOC composition is hard to read
+const EnhancedComponent = withRouter(
+  withTheme(
+    withAuth(
+      withData(MyComponent, fetchData)
+    )
+  )
+);
+
+// Hooks: Just call them
+function MyComponent() {
+  const router = useRouter();
+  const theme = useTheme();
+  const auth = useAuth();
+  const { data } = useFetch(fetchData);
+
+  // All the functionality, none of the wrapping
+}
+```
+
+---
+
+## Replacing Render Props
+
+Render props pass data through a render function. Hooks make this simpler.
+
+### Mouse Position
+
+```tsx
+// Render Prop
+class MouseTracker extends React.Component {
+  state = { x: 0, y: 0 };
+
+  handleMouseMove = (event) => {
+    this.setState({ x: event.clientX, y: event.clientY });
+  };
+
+  render() {
+    return (
+      <div onMouseMove={this.handleMouseMove}>
+        {this.props.children(this.state)}
+      </div>
+    );
+  }
+}
+
+// Usage
+<MouseTracker>
+  {({ x, y }) => <Cursor x={x} y={y} />}
+</MouseTracker>
+
+// Hook replacement
+function useMousePosition() {
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const handleMouseMove = (event: MouseEvent) => {
+      setPosition({ x: event.clientX, y: event.clientY });
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
+
+  return position;
+}
+
+// Usage
+function CursorTracker() {
+  const { x, y } = useMousePosition();
+  return <Cursor x={x} y={y} />;
+}
+```
+
+### Toggle Pattern
+
+```tsx
+// Render Prop
+class Toggle extends React.Component {
+  state = { on: false };
+
+  toggle = () => this.setState(prev => ({ on: !prev.on }));
+
+  render() {
+    return this.props.children({
+      on: this.state.on,
+      toggle: this.toggle,
+    });
+  }
+}
+
+// Usage
+<Toggle>
+  {({ on, toggle }) => (
+    <button onClick={toggle}>{on ? 'ON' : 'OFF'}</button>
+  )}
+</Toggle>
+
+// Hook replacement
+function useToggle(initial = false) {
+  const [on, setOn] = useState(initial);
+  const toggle = useCallback(() => setOn(prev => !prev), []);
+  return [on, toggle] as const;
+}
+
+// Usage
+function ToggleButton() {
+  const [on, toggle] = useToggle();
+  return <button onClick={toggle}>{on ? 'ON' : 'OFF'}</button>;
+}
+```
+
+---
+
+## Migrating from Mixins
+
+Mixins are an old pattern (pre-ES6 classes) for sharing logic. They're no longer supported but exist in legacy codebases.
+
+```tsx
+// Mixin (React.createClass era)
+const TimerMixin = {
+  getInitialState() {
+    return { time: 0 };
+  },
+
+  componentDidMount() {
+    this.interval = setInterval(this.tick, 1000);
+  },
+
+  componentWillUnmount() {
+    clearInterval(this.interval);
+  },
+
+  tick() {
+    this.setState(prev => ({ time: prev.time + 1 }));
+  },
+};
+
+const MyComponent = React.createClass({
+  mixins: [TimerMixin],
+
+  render() {
+    return <div>Time: {this.state.time}</div>;
+  },
+});
+
+// Hook replacement
+function useTimer() {
+  const [time, setTime] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTime(t => t + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return time;
+}
+
+// Usage
+function MyComponent() {
+  const time = useTimer();
+  return <div>Time: {time}</div>;
+}
+```
+
+---
+
+## Migration Strategy
+
+### Incremental Migration
+
+Don't rewrite everything at once:
+
+1. **New features**: Write new components with hooks
+2. **Bug fixes**: Convert affected components
+3. **Refactors**: Convert during planned refactoring
+4. **Shared logic**: Convert HOCs/render props to hooks as you encounter them
+
+### Wrapper Pattern
+
+Keep legacy class, wrap with hook:
+
+```tsx
+// Legacy class component (don't modify)
+class LegacyForm extends React.Component {
+  // ... lots of complex logic
+}
+
+// Wrapper to use hook data
+function FormWrapper(props) {
+  const { user } = useAuth();
+  const theme = useTheme();
+
+  return <LegacyForm {...props} user={user} theme={theme} />;
+}
+```
+
+### Coexistence
+
+Classes and functions work together:
+
+```tsx
+// Function component with hooks
+function Parent() {
+  const [data, setData] = useState(null);
+
+  return (
+    <LegacyClassChild
+      data={data}
+      onUpdate={setData}
+    />
+  );
+}
+
+// Class component receiving hooks data
+class LegacyClassChild extends React.Component {
+  render() {
+    return <div>{this.props.data}</div>;
+  }
+}
+```
+
+---
+
+## Common Migration Pitfalls
+
+### Pitfall 1: Converting componentWillMount
+
+```tsx
+// Class: componentWillMount (deprecated)
+class Component extends React.Component {
+  componentWillMount() {
+    this.setup(); // Runs before first render
+  }
+}
+
+// ❌ Wrong: useEffect runs AFTER render
+function Component() {
+  useEffect(() => {
+    setup(); // Too late!
+  }, []);
+}
+
+// ✅ Right: Initialize in useState or use lazy initialization
+function Component() {
+  const [data] = useState(() => {
+    return expensiveSetup(); // Runs during first render
+  });
+}
+```
+
+### Pitfall 2: Missing Cleanup
+
+```tsx
+// Class: Cleanup was explicit
+class Component extends React.Component {
+  componentWillUnmount() {
+    this.subscription.unsubscribe();
+  }
+}
+
+// ❌ Wrong: Forgot cleanup
+function Component() {
+  useEffect(() => {
+    const subscription = subscribe();
+    // No cleanup!
+  }, []);
+}
+
+// ✅ Right: Return cleanup function
+function Component() {
+  useEffect(() => {
+    const subscription = subscribe();
+    return () => subscription.unsubscribe();
+  }, []);
+}
+```
+
+### Pitfall 3: Over-converting to useState
+
+```tsx
+// Class: Single state object
+class Form extends React.Component {
+  state = { name: '', email: '', phone: '', address: '' };
+
+  handleChange = (e) => {
+    this.setState({ [e.target.name]: e.target.value });
+  };
+}
+
+// ❌ Awkward: Too many useState calls
+function Form() {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
+
+  // Need individual handlers for each...
+}
+
+// ✅ Better: useReducer for complex state
+function Form() {
+  const [state, dispatch] = useReducer(
+    (state, action) => ({ ...state, [action.name]: action.value }),
+    { name: '', email: '', phone: '', address: '' }
+  );
+
+  const handleChange = (e) => {
+    dispatch({ name: e.target.name, value: e.target.value });
+  };
+}
+```
+
+---
+
+## Summary
+
+Migration from legacy patterns to hooks:
+
+| Legacy Pattern | Hook Replacement |
+|---------------|------------------|
+| `this.state` | `useState` / `useReducer` |
+| `componentDidMount` | `useEffect(..., [])` |
+| `componentDidUpdate` | `useEffect(..., [deps])` |
+| `componentWillUnmount` | `useEffect` cleanup |
+| Instance variables | `useRef` |
+| `getDerivedStateFromProps` | Calculate during render |
+| HOCs | Custom hooks |
+| Render props | Custom hooks |
+| Mixins | Custom hooks |
+
+Migration strategy:
+- Migrate incrementally
+- New code uses hooks
+- Convert during bug fixes and refactors
+- Classes and functions can coexist
+
+<HookCard
+  name="Legacy Migration"
+  signature="Class → Function + Hooks"
+  description="Convert class lifecycles to useEffect, state to useState/useReducer, and replace HOCs/render props with custom hooks. Migrate incrementally."
+  category="pattern"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Convert this class component to hooks:
+
+```tsx
+class Timer extends React.Component {
+  state = { seconds: 0, isRunning: false };
+  intervalId = null;
+
+  start = () => {
+    if (this.state.isRunning) return;
+    this.setState({ isRunning: true });
+    this.intervalId = setInterval(() => {
+      this.setState(prev => ({ seconds: prev.seconds + 1 }));
+    }, 1000);
+  };
+
+  stop = () => {
+    this.setState({ isRunning: false });
+    clearInterval(this.intervalId);
+  };
+
+  reset = () => {
+    this.stop();
+    this.setState({ seconds: 0 });
+  };
+
+  componentWillUnmount() {
+    clearInterval(this.intervalId);
+  }
+
+  render() {
+    return (
+      <div>
+        <p>{this.state.seconds}s</p>
+        <button onClick={this.start}>Start</button>
+        <button onClick={this.stop}>Stop</button>
+        <button onClick={this.reset}>Reset</button>
+      </div>
+    );
+  }
+}
+```
+
+### Core
+
+Replace this HOC with a custom hook:
+
+```tsx
+function withWindowSize(WrappedComponent) {
+  return class extends React.Component {
+    state = {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+
+    componentDidMount() {
+      window.addEventListener('resize', this.handleResize);
+    }
+
+    componentWillUnmount() {
+      window.removeEventListener('resize', this.handleResize);
+    }
+
+    handleResize = () => {
+      this.setState({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+    };
+
+    render() {
+      return (
+        <WrappedComponent
+          {...this.props}
+          windowWidth={this.state.width}
+          windowHeight={this.state.height}
+        />
+      );
+    }
+  };
+}
+```
+
+### Stretch
+
+Migrate this complex class component with multiple HOCs to hooks:
+
+```tsx
+class Dashboard extends React.Component {
+  state = {
+    selectedTab: 'overview',
+    notifications: [],
+    isNotificationsPanelOpen: false,
+  };
+
+  componentDidMount() {
+    this.fetchNotifications();
+    this.notificationInterval = setInterval(this.fetchNotifications, 30000);
+  }
+
+  componentWillUnmount() {
+    clearInterval(this.notificationInterval);
+  }
+
+  fetchNotifications = async () => {
+    const notifications = await api.getNotifications(this.props.user.id);
+    this.setState({ notifications });
+  };
+
+  // ... more methods
+}
+
+// Wrapped with HOCs
+export default withRouter(
+  withTheme(
+    withAuth(Dashboard)
+  )
+);
+```
+
+Convert to a function component using:
+- Custom hooks for each HOC's functionality
+- Proper effect cleanup
+- Memoization where appropriate

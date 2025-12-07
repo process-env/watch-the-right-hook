@@ -1,0 +1,895 @@
+# Testing & Maintenance for Hooks
+
+Custom hooks need tests. But testing hooks isn't like testing components—hooks can't render on their own. This chapter covers how to test hooks effectively, maintain them over time, and handle the unique challenges they present.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Test hooks with @testing-library/react
+- Handle async behavior in hook tests
+- Test hooks that use context
+- Mock external dependencies
+- Maintain hooks as requirements change
+
+---
+
+## The Testing Problem
+
+Hooks can only be called inside React components. You can't do this:
+
+```tsx
+// ❌ Won't work: Hooks must be called in a component
+test('useCounter increments', () => {
+  const { count, increment } = useCounter(); // Error!
+  increment();
+  expect(count).toBe(1);
+});
+```
+
+You need a component to host the hook.
+
+---
+
+## renderHook: The Solution
+
+`@testing-library/react` provides `renderHook`:
+
+```tsx
+import { renderHook, act } from '@testing-library/react';
+
+test('useCounter increments', () => {
+  const { result } = renderHook(() => useCounter());
+
+  expect(result.current.count).toBe(0);
+
+  act(() => {
+    result.current.increment();
+  });
+
+  expect(result.current.count).toBe(1);
+});
+```
+
+- `renderHook` creates a test component that calls your hook
+- `result.current` contains the hook's return value
+- `act` wraps state updates (just like in component tests)
+
+---
+
+## Basic Hook Testing
+
+### Testing Return Values
+
+```tsx
+function useToggle(initial = false) {
+  const [value, setValue] = useState(initial);
+  const toggle = useCallback(() => setValue(v => !v), []);
+  const setTrue = useCallback(() => setValue(true), []);
+  const setFalse = useCallback(() => setValue(false), []);
+
+  return { value, toggle, setTrue, setFalse };
+}
+
+// Tests
+describe('useToggle', () => {
+  test('starts with initial value', () => {
+    const { result } = renderHook(() => useToggle(true));
+    expect(result.current.value).toBe(true);
+  });
+
+  test('defaults to false', () => {
+    const { result } = renderHook(() => useToggle());
+    expect(result.current.value).toBe(false);
+  });
+
+  test('toggle flips value', () => {
+    const { result } = renderHook(() => useToggle());
+
+    act(() => {
+      result.current.toggle();
+    });
+    expect(result.current.value).toBe(true);
+
+    act(() => {
+      result.current.toggle();
+    });
+    expect(result.current.value).toBe(false);
+  });
+
+  test('setTrue sets to true', () => {
+    const { result } = renderHook(() => useToggle(false));
+
+    act(() => {
+      result.current.setTrue();
+    });
+    expect(result.current.value).toBe(true);
+  });
+
+  test('setFalse sets to false', () => {
+    const { result } = renderHook(() => useToggle(true));
+
+    act(() => {
+      result.current.setFalse();
+    });
+    expect(result.current.value).toBe(false);
+  });
+});
+```
+
+### Testing with Props
+
+When hooks depend on arguments, test how they respond to changes:
+
+```tsx
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debounced;
+}
+
+// Tests
+describe('useDebounce', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('returns initial value immediately', () => {
+    const { result } = renderHook(() => useDebounce('hello', 500));
+    expect(result.current).toBe('hello');
+  });
+
+  test('debounces value changes', () => {
+    const { result, rerender } = renderHook(
+      ({ value, delay }) => useDebounce(value, delay),
+      { initialProps: { value: 'hello', delay: 500 } }
+    );
+
+    // Change the value
+    rerender({ value: 'world', delay: 500 });
+
+    // Not updated yet
+    expect(result.current).toBe('hello');
+
+    // Fast forward past delay
+    act(() => {
+      jest.advanceTimersByTime(500);
+    });
+
+    expect(result.current).toBe('world');
+  });
+
+  test('cancels pending update on new value', () => {
+    const { result, rerender } = renderHook(
+      ({ value }) => useDebounce(value, 500),
+      { initialProps: { value: 'a' } }
+    );
+
+    rerender({ value: 'b' });
+    act(() => {
+      jest.advanceTimersByTime(300);
+    });
+
+    rerender({ value: 'c' });
+    act(() => {
+      jest.advanceTimersByTime(300);
+    });
+
+    // Still 'a' because 'b' was cancelled
+    expect(result.current).toBe('a');
+
+    act(() => {
+      jest.advanceTimersByTime(200);
+    });
+
+    // Now 'c' after full delay
+    expect(result.current).toBe('c');
+  });
+});
+```
+
+---
+
+## Testing Async Hooks
+
+### Using waitFor
+
+For hooks that perform async operations:
+
+```tsx
+function useFetch<T>(url: string) {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
+        if (!cancelled) {
+          setData(data);
+          setLoading(false);
+        }
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setError(err);
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  return { data, loading, error };
+}
+
+// Tests
+describe('useFetch', () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  test('fetches data successfully', async () => {
+    const mockData = { id: 1, name: 'Test' };
+    (global.fetch as jest.Mock).mockResolvedValue({
+      json: () => Promise.resolve(mockData),
+    });
+
+    const { result } = renderHook(() => useFetch('/api/test'));
+
+    // Initially loading
+    expect(result.current.loading).toBe(true);
+    expect(result.current.data).toBe(null);
+
+    // Wait for fetch to complete
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.data).toEqual(mockData);
+    expect(result.current.error).toBe(null);
+  });
+
+  test('handles fetch error', async () => {
+    const error = new Error('Network error');
+    (global.fetch as jest.Mock).mockRejectedValue(error);
+
+    const { result } = renderHook(() => useFetch('/api/test'));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.error).toEqual(error);
+    expect(result.current.data).toBe(null);
+  });
+
+  test('ignores stale responses', async () => {
+    let resolveFirst: (value: unknown) => void;
+    let resolveSecond: (value: unknown) => void;
+
+    (global.fetch as jest.Mock)
+      .mockImplementationOnce(() => new Promise(r => { resolveFirst = r; }))
+      .mockImplementationOnce(() => new Promise(r => { resolveSecond = r; }));
+
+    const { result, rerender } = renderHook(
+      ({ url }) => useFetch(url),
+      { initialProps: { url: '/api/first' } }
+    );
+
+    // Change URL before first request completes
+    rerender({ url: '/api/second' });
+
+    // Resolve second request first
+    await act(async () => {
+      resolveSecond!({ json: () => Promise.resolve({ data: 'second' }) });
+    });
+
+    await waitFor(() => {
+      expect(result.current.data).toEqual({ data: 'second' });
+    });
+
+    // Now resolve first request (stale)
+    await act(async () => {
+      resolveFirst!({ json: () => Promise.resolve({ data: 'first' }) });
+    });
+
+    // Should still have second data, first was ignored
+    expect(result.current.data).toEqual({ data: 'second' });
+  });
+});
+```
+
+---
+
+## Testing Hooks with Context
+
+When hooks use context, wrap them in a provider:
+
+```tsx
+const ThemeContext = createContext<'light' | 'dark'>('light');
+
+function useTheme() {
+  return useContext(ThemeContext);
+}
+
+// Test
+test('useTheme returns context value', () => {
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <ThemeContext.Provider value="dark">
+      {children}
+    </ThemeContext.Provider>
+  );
+
+  const { result } = renderHook(() => useTheme(), { wrapper });
+
+  expect(result.current).toBe('dark');
+});
+```
+
+### Creating a Reusable Wrapper
+
+```tsx
+function createWrapper(theme: 'light' | 'dark') {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <ThemeContext.Provider value={theme}>
+        {children}
+      </ThemeContext.Provider>
+    );
+  };
+}
+
+test('useTheme with light theme', () => {
+  const { result } = renderHook(() => useTheme(), {
+    wrapper: createWrapper('light'),
+  });
+  expect(result.current).toBe('light');
+});
+
+test('useTheme with dark theme', () => {
+  const { result } = renderHook(() => useTheme(), {
+    wrapper: createWrapper('dark'),
+  });
+  expect(result.current).toBe('dark');
+});
+```
+
+### Multiple Providers
+
+```tsx
+function AllProviders({ children }: { children: ReactNode }) {
+  return (
+    <AuthProvider>
+      <ThemeProvider>
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      </ThemeProvider>
+    </AuthProvider>
+  );
+}
+
+test('hook with multiple contexts', () => {
+  const { result } = renderHook(() => useAppData(), {
+    wrapper: AllProviders,
+  });
+  // ...
+});
+```
+
+---
+
+## Mocking Dependencies
+
+### Mocking Modules
+
+```tsx
+// hooks/useLocalStorage.ts
+function useLocalStorage<T>(key: string, initial: T) {
+  const [value, setValue] = useState<T>(() => {
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored) : initial;
+  });
+
+  useEffect(() => {
+    localStorage.setItem(key, JSON.stringify(value));
+  }, [key, value]);
+
+  return [value, setValue] as const;
+}
+
+// Test
+describe('useLocalStorage', () => {
+  const localStorageMock = (() => {
+    let store: Record<string, string> = {};
+    return {
+      getItem: jest.fn((key: string) => store[key] || null),
+      setItem: jest.fn((key: string, value: string) => {
+        store[key] = value;
+      }),
+      removeItem: jest.fn((key: string) => {
+        delete store[key];
+      }),
+      clear: jest.fn(() => {
+        store = {};
+      }),
+    };
+  })();
+
+  beforeEach(() => {
+    Object.defineProperty(window, 'localStorage', {
+      value: localStorageMock,
+    });
+    localStorageMock.clear();
+  });
+
+  test('reads initial value from localStorage', () => {
+    localStorageMock.setItem('key', JSON.stringify('stored'));
+
+    const { result } = renderHook(() => useLocalStorage('key', 'default'));
+
+    expect(result.current[0]).toBe('stored');
+  });
+
+  test('uses default when localStorage is empty', () => {
+    const { result } = renderHook(() => useLocalStorage('key', 'default'));
+
+    expect(result.current[0]).toBe('default');
+  });
+
+  test('updates localStorage on change', () => {
+    const { result } = renderHook(() => useLocalStorage('key', 'initial'));
+
+    act(() => {
+      result.current[1]('updated');
+    });
+
+    expect(localStorageMock.setItem).toHaveBeenCalledWith(
+      'key',
+      JSON.stringify('updated')
+    );
+  });
+});
+```
+
+### Mocking External APIs
+
+```tsx
+// Mock the entire module
+jest.mock('../api/users', () => ({
+  fetchUser: jest.fn(),
+}));
+
+import { fetchUser } from '../api/users';
+
+test('useUser fetches user data', async () => {
+  (fetchUser as jest.Mock).mockResolvedValue({ id: 1, name: 'John' });
+
+  const { result } = renderHook(() => useUser(1));
+
+  await waitFor(() => {
+    expect(result.current.user).toEqual({ id: 1, name: 'John' });
+  });
+});
+```
+
+---
+
+## Testing Effect Cleanup
+
+Verify cleanup functions work:
+
+```tsx
+function useInterval(callback: () => void, delay: number | null) {
+  const savedCallback = useRef(callback);
+
+  useEffect(() => {
+    savedCallback.current = callback;
+  }, [callback]);
+
+  useEffect(() => {
+    if (delay === null) return;
+
+    const id = setInterval(() => savedCallback.current(), delay);
+    return () => clearInterval(id);
+  }, [delay]);
+}
+
+// Tests
+describe('useInterval', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('calls callback at interval', () => {
+    const callback = jest.fn();
+    renderHook(() => useInterval(callback, 1000));
+
+    expect(callback).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  test('clears interval on unmount', () => {
+    const callback = jest.fn();
+    const { unmount } = renderHook(() => useInterval(callback, 1000));
+
+    act(() => {
+      jest.advanceTimersByTime(500);
+    });
+
+    unmount();
+
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // Callback should not have been called after unmount
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  test('clears interval when delay becomes null', () => {
+    const callback = jest.fn();
+    const { rerender } = renderHook(
+      ({ delay }) => useInterval(callback, delay),
+      { initialProps: { delay: 1000 as number | null } }
+    );
+
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    rerender({ delay: null });
+
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    // No more calls after delay became null
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+});
+```
+
+---
+
+## Testing Custom Hook Composition
+
+When hooks use other hooks:
+
+```tsx
+function useAuth() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    checkSession().then(setUser).finally(() => setLoading(false));
+  }, []);
+
+  return { user, loading, isAuthenticated: !!user };
+}
+
+function useProtectedResource(resourceId: string) {
+  const { isAuthenticated, loading: authLoading } = useAuth();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (authLoading || !isAuthenticated) return;
+
+    fetchResource(resourceId).then(setData).finally(() => setLoading(false));
+  }, [resourceId, isAuthenticated, authLoading]);
+
+  return {
+    data,
+    loading: authLoading || loading,
+    isAuthenticated,
+  };
+}
+
+// Test
+jest.mock('./useAuth', () => ({
+  useAuth: jest.fn(),
+}));
+
+describe('useProtectedResource', () => {
+  test('fetches resource when authenticated', async () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      user: { id: 1 },
+      loading: false,
+      isAuthenticated: true,
+    });
+
+    global.fetch = jest.fn().mockResolvedValue({
+      json: () => Promise.resolve({ id: 'resource-1' }),
+    });
+
+    const { result } = renderHook(() => useProtectedResource('resource-1'));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.data).toEqual({ id: 'resource-1' });
+  });
+
+  test('does not fetch when not authenticated', () => {
+    (useAuth as jest.Mock).mockReturnValue({
+      user: null,
+      loading: false,
+      isAuthenticated: false,
+    });
+
+    const { result } = renderHook(() => useProtectedResource('resource-1'));
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(result.current.isAuthenticated).toBe(false);
+  });
+});
+```
+
+---
+
+## Maintenance Best Practices
+
+### 1. Document Hook Contracts
+
+```tsx
+/**
+ * Manages form state with validation.
+ *
+ * @param options.initialValues - Starting form values
+ * @param options.validate - Validation function (optional)
+ * @param options.onSubmit - Submit handler
+ *
+ * @returns Form state and actions
+ *
+ * @example
+ * const { register, handleSubmit, errors } = useForm({
+ *   initialValues: { email: '' },
+ *   validate: (values) => ({
+ *     email: !values.email ? 'Required' : undefined,
+ *   }),
+ *   onSubmit: async (values) => {
+ *     await submitForm(values);
+ *   },
+ * });
+ */
+function useForm<T>(options: UseFormOptions<T>) {
+  // ...
+}
+```
+
+### 2. Keep Dependencies Explicit
+
+```tsx
+// ❌ Hidden dependency on external variable
+let globalConfig = {};
+
+function useBadHook() {
+  useEffect(() => {
+    doSomething(globalConfig); // Not in deps, changes won't trigger
+  }, []);
+}
+
+// ✅ Explicit dependencies
+function useGoodHook(config: Config) {
+  useEffect(() => {
+    doSomething(config);
+  }, [config]);
+}
+```
+
+### 3. Version Your Hooks
+
+When making breaking changes:
+
+```tsx
+// v1 - Original API
+function useCounter() {
+  const [count, setCount] = useState(0);
+  return { count, setCount };
+}
+
+// v2 - New API (breaking)
+function useCounter(initial = 0) {
+  const [count, setCount] = useState(initial);
+  return {
+    count,
+    increment: () => setCount(c => c + 1),
+    decrement: () => setCount(c => c - 1),
+    reset: () => setCount(initial),
+  };
+}
+
+// Migration: Keep v1 as deprecated
+/** @deprecated Use useCounter instead */
+function useCounterV1() {
+  const { count, ...rest } = useCounter();
+  return { count, setCount: (n: number) => { /* adapter */ } };
+}
+```
+
+### 4. Write Migration Codemods
+
+For large codebases, automate migrations:
+
+```tsx
+// codemod: migrate-useCounter.ts
+export default function transformer(file, api) {
+  const j = api.jscodeshift;
+
+  return j(file.source)
+    .find(j.CallExpression, { callee: { name: 'useCounterV1' } })
+    .replaceWith(path => {
+      return j.callExpression(j.identifier('useCounter'), []);
+    })
+    .toSource();
+}
+```
+
+### 5. Deprecation Warnings
+
+```tsx
+function useDeprecatedHook() {
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn(
+        'useDeprecatedHook is deprecated. Use useNewHook instead. ' +
+        'See migration guide: https://...'
+      );
+    }
+  }, []);
+
+  // ...
+}
+```
+
+---
+
+## Summary
+
+Testing hooks requires special tools and patterns:
+
+| Challenge | Solution |
+|-----------|----------|
+| Hooks need components | Use `renderHook` |
+| State updates | Wrap in `act` |
+| Async behavior | Use `waitFor` |
+| Context dependencies | Provide wrapper |
+| External APIs | Mock modules |
+| Timers | Use fake timers |
+
+Maintenance best practices:
+- Document contracts
+- Keep dependencies explicit
+- Version breaking changes
+- Write codemods for migrations
+- Add deprecation warnings
+
+<HookCard
+  name="Testing Hooks"
+  signature="renderHook(() => useMyHook(), { wrapper })"
+  description="Test hooks using @testing-library/react's renderHook. Wrap state updates in act(), use waitFor for async, and provide context via wrapper option."
+  category="testing"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Write tests for this `useCounter` hook:
+
+```tsx
+function useCounter(initial = 0, { min, max }: { min?: number; max?: number } = {}) {
+  const [count, setCount] = useState(initial);
+
+  const increment = useCallback(() => {
+    setCount(c => (max !== undefined ? Math.min(c + 1, max) : c + 1));
+  }, [max]);
+
+  const decrement = useCallback(() => {
+    setCount(c => (min !== undefined ? Math.max(c - 1, min) : c - 1));
+  }, [min]);
+
+  return { count, increment, decrement, setCount };
+}
+
+// Test:
+// - Initial value
+// - Increment/decrement
+// - Min/max bounds
+// - setCount direct value
+```
+
+### Core
+
+Write comprehensive tests for `useAsync`:
+
+```tsx
+function useAsync<T, Args extends unknown[]>(
+  asyncFn: (...args: Args) => Promise<T>
+) {
+  const [state, setState] = useState<{
+    status: 'idle' | 'pending' | 'success' | 'error';
+    data: T | null;
+    error: Error | null;
+  }>({
+    status: 'idle',
+    data: null,
+    error: null,
+  });
+
+  const execute = useCallback(async (...args: Args) => {
+    setState({ status: 'pending', data: null, error: null });
+    try {
+      const data = await asyncFn(...args);
+      setState({ status: 'success', data, error: null });
+      return data;
+    } catch (error) {
+      setState({ status: 'error', data: null, error: error as Error });
+      throw error;
+    }
+  }, [asyncFn]);
+
+  return { ...state, execute };
+}
+
+// Test:
+// - Initial idle state
+// - Pending state during execution
+// - Success state with data
+// - Error state on failure
+// - Multiple executions
+// - Arguments passed through
+```
+
+### Stretch
+
+Build a test suite for a complex `useForm` hook:
+
+```tsx
+// Test scenarios:
+// - Initial values
+// - Field registration
+// - Value changes
+// - Validation on blur
+// - Validation on submit
+// - Async validation
+// - Field arrays (add/remove)
+// - Form reset
+// - Dirty state tracking
+// - Submit handling
+// - Error clearing
+// - Touched state
+```

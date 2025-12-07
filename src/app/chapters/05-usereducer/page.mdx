@@ -1,0 +1,463 @@
+# useReducer: Domain Events Over Boolean Soup
+
+When your state updates become complex—multiple related values changing together, state machines, or actions that have names—`useReducer` brings clarity. It's not about performance; it's about expressing *what happened* instead of *what changed*.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Know when useReducer beats useState
+- Write reducers that are easy to test and understand
+- Model state transitions as named actions
+- Implement state machines with useReducer
+- Use TypeScript discriminated unions for type-safe actions
+
+---
+
+## The Basics
+
+```tsx
+const [state, dispatch] = useReducer(reducer, initialState);
+```
+
+- `state`: Current state value
+- `dispatch`: Function to send actions
+- `reducer`: Pure function `(state, action) => newState`
+- `initialState`: Starting state
+
+```tsx
+type State = { count: number };
+type Action = { type: 'increment' } | { type: 'decrement' } | { type: 'reset' };
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'increment':
+      return { count: state.count + 1 };
+    case 'decrement':
+      return { count: state.count - 1 };
+    case 'reset':
+      return { count: 0 };
+  }
+}
+
+function Counter() {
+  const [state, dispatch] = useReducer(reducer, { count: 0 });
+
+  return (
+    <div>
+      <span>{state.count}</span>
+      <button onClick={() => dispatch({ type: 'increment' })}>+</button>
+      <button onClick={() => dispatch({ type: 'decrement' })}>-</button>
+      <button onClick={() => dispatch({ type: 'reset' })}>Reset</button>
+    </div>
+  );
+}
+```
+
+---
+
+## When to Choose useReducer
+
+### useState: Good for independent values
+
+```tsx
+const [name, setName] = useState('');
+const [email, setEmail] = useState('');
+const [age, setAge] = useState(0);
+```
+
+### useReducer: Good for related values that change together
+
+```tsx
+// ❌ Boolean soup with useState
+const [isLoading, setIsLoading] = useState(false);
+const [error, setError] = useState<Error | null>(null);
+const [data, setData] = useState<Data | null>(null);
+
+const fetchData = async () => {
+  setIsLoading(true);
+  setError(null);
+  try {
+    const result = await api.fetch();
+    setData(result);
+    setIsLoading(false);
+  } catch (e) {
+    setError(e);
+    setIsLoading(false);
+  }
+};
+
+// ✅ Clear state machine with useReducer
+type State =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; data: Data }
+  | { status: 'error'; error: Error };
+
+type Action =
+  | { type: 'FETCH_START' }
+  | { type: 'FETCH_SUCCESS'; data: Data }
+  | { type: 'FETCH_ERROR'; error: Error };
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'FETCH_START':
+      return { status: 'loading' };
+    case 'FETCH_SUCCESS':
+      return { status: 'success', data: action.data };
+    case 'FETCH_ERROR':
+      return { status: 'error', error: action.error };
+  }
+}
+```
+
+<Callout type="tip" title="The Naming Test">
+If you can name what happened ("user logged in", "form submitted", "item deleted"), use useReducer. If it's just "value changed", useState is fine.
+</Callout>
+
+---
+
+## Actions as Domain Events
+
+Actions should describe *what happened*, not *what to do with state*.
+
+```tsx
+// ❌ Implementation-focused actions
+{ type: 'SET_ITEMS', items: [...] }
+{ type: 'SET_LOADING', loading: true }
+{ type: 'SET_ERROR', error: e }
+
+// ✅ Domain-focused actions
+{ type: 'ITEMS_LOADED', items: [...] }
+{ type: 'FETCH_STARTED' }
+{ type: 'FETCH_FAILED', error: e }
+```
+
+Domain actions:
+- Read like a log of what happened
+- Are easier to debug (Redux DevTools shows action history)
+- Make the reducer the single source of truth for state transitions
+
+---
+
+## Reducer Patterns
+
+### Handle Unknown Actions
+
+Always handle the default case:
+
+```tsx
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'increment':
+      return { ...state, count: state.count + 1 };
+    default:
+      // In TypeScript with exhaustive types, this is unreachable
+      // but good for runtime safety
+      return state;
+  }
+}
+```
+
+### Extract Action Creators
+
+For actions with payloads, create helper functions:
+
+```tsx
+// Action creators
+const actions = {
+  addTodo: (text: string) => ({ type: 'ADD_TODO' as const, text }),
+  toggleTodo: (id: number) => ({ type: 'TOGGLE_TODO' as const, id }),
+  deleteTodo: (id: number) => ({ type: 'DELETE_TODO' as const, id }),
+};
+
+// Usage
+dispatch(actions.addTodo('Learn useReducer'));
+```
+
+### Lazy Initialization
+
+Like `useState`, you can compute initial state lazily:
+
+```tsx
+function init(initialCount: number): State {
+  return { count: initialCount };
+}
+
+function Counter({ initialCount }: { initialCount: number }) {
+  const [state, dispatch] = useReducer(reducer, initialCount, init);
+  // ...
+}
+```
+
+---
+
+## State Machines with useReducer
+
+State machines make impossible states impossible. Each state defines what actions are valid.
+
+```tsx
+type FormState =
+  | { status: 'editing'; values: FormValues; errors: Record<string, string> }
+  | { status: 'submitting'; values: FormValues }
+  | { status: 'success'; result: SubmitResult }
+  | { status: 'error'; values: FormValues; submitError: string };
+
+type FormAction =
+  | { type: 'FIELD_CHANGED'; field: string; value: string }
+  | { type: 'SUBMIT' }
+  | { type: 'SUBMIT_SUCCESS'; result: SubmitResult }
+  | { type: 'SUBMIT_ERROR'; error: string }
+  | { type: 'RETRY' };
+
+function formReducer(state: FormState, action: FormAction): FormState {
+  switch (state.status) {
+    case 'editing':
+      switch (action.type) {
+        case 'FIELD_CHANGED':
+          return {
+            ...state,
+            values: { ...state.values, [action.field]: action.value },
+            errors: validate({ ...state.values, [action.field]: action.value }),
+          };
+        case 'SUBMIT':
+          if (Object.keys(state.errors).length > 0) return state;
+          return { status: 'submitting', values: state.values };
+        default:
+          return state;
+      }
+
+    case 'submitting':
+      switch (action.type) {
+        case 'SUBMIT_SUCCESS':
+          return { status: 'success', result: action.result };
+        case 'SUBMIT_ERROR':
+          return { status: 'error', values: state.values, submitError: action.error };
+        default:
+          return state;
+      }
+
+    case 'error':
+      switch (action.type) {
+        case 'RETRY':
+          return { status: 'submitting', values: state.values };
+        case 'FIELD_CHANGED':
+          return {
+            status: 'editing',
+            values: { ...state.values, [action.field]: action.value },
+            errors: {},
+          };
+        default:
+          return state;
+      }
+
+    case 'success':
+      return state; // Terminal state, no transitions
+
+    default:
+      return state;
+  }
+}
+```
+
+<Callout type="info" title="State-First Switching">
+Notice how the outer switch is on `state.status`, not `action.type`. This makes invalid transitions impossible—you can't submit while already submitting.
+</Callout>
+
+---
+
+## TypeScript: Discriminated Unions
+
+TypeScript shines with useReducer. Use discriminated unions for type-safe actions:
+
+```tsx
+// Each action has a unique `type` that TypeScript uses to narrow the type
+type Action =
+  | { type: 'ADD_ITEM'; item: Item }
+  | { type: 'REMOVE_ITEM'; id: string }
+  | { type: 'UPDATE_ITEM'; id: string; updates: Partial<Item> }
+  | { type: 'CLEAR_ALL' };
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'ADD_ITEM':
+      // TypeScript knows `action.item` exists here
+      return { ...state, items: [...state.items, action.item] };
+
+    case 'REMOVE_ITEM':
+      // TypeScript knows `action.id` exists here
+      return { ...state, items: state.items.filter(i => i.id !== action.id) };
+
+    case 'UPDATE_ITEM':
+      // TypeScript knows both `action.id` and `action.updates` exist
+      return {
+        ...state,
+        items: state.items.map(i =>
+          i.id === action.id ? { ...i, ...action.updates } : i
+        ),
+      };
+
+    case 'CLEAR_ALL':
+      // No payload needed
+      return { ...state, items: [] };
+  }
+}
+```
+
+### Exhaustive Checking
+
+Make TypeScript error if you miss an action:
+
+```tsx
+function assertNever(x: never): never {
+  throw new Error(`Unexpected action: ${x}`);
+}
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'ADD_ITEM':
+      return { ...state, items: [...state.items, action.item] };
+    // If you forget a case, TypeScript errors on the next line
+    default:
+      return assertNever(action);
+  }
+}
+```
+
+---
+
+## Testing Reducers
+
+Reducers are pure functions—easy to test without React:
+
+```tsx
+describe('todoReducer', () => {
+  it('adds a todo', () => {
+    const state = { todos: [] };
+    const action = { type: 'ADD_TODO' as const, text: 'Test' };
+
+    const result = todoReducer(state, action);
+
+    expect(result.todos).toHaveLength(1);
+    expect(result.todos[0].text).toBe('Test');
+  });
+
+  it('toggles a todo', () => {
+    const state = { todos: [{ id: 1, text: 'Test', completed: false }] };
+    const action = { type: 'TOGGLE_TODO' as const, id: 1 };
+
+    const result = todoReducer(state, action);
+
+    expect(result.todos[0].completed).toBe(true);
+  });
+
+  it('ignores toggle for non-existent id', () => {
+    const state = { todos: [{ id: 1, text: 'Test', completed: false }] };
+    const action = { type: 'TOGGLE_TODO' as const, id: 999 };
+
+    const result = todoReducer(state, action);
+
+    expect(result).toEqual(state);
+  });
+});
+```
+
+---
+
+## useReducer + useContext = Global State
+
+Combine useReducer with useContext for app-wide state:
+
+```tsx
+type State = { user: User | null; theme: 'light' | 'dark' };
+type Action =
+  | { type: 'LOGIN'; user: User }
+  | { type: 'LOGOUT' }
+  | { type: 'TOGGLE_THEME' };
+
+const StateContext = createContext<State | null>(null);
+const DispatchContext = createContext<Dispatch<Action> | null>(null);
+
+function AppProvider({ children }: { children: ReactNode }) {
+  const [state, dispatch] = useReducer(appReducer, initialState);
+
+  return (
+    <StateContext.Provider value={state}>
+      <DispatchContext.Provider value={dispatch}>
+        {children}
+      </DispatchContext.Provider>
+    </StateContext.Provider>
+  );
+}
+
+// Custom hooks for consuming
+function useAppState() {
+  const state = useContext(StateContext);
+  if (!state) throw new Error('useAppState must be used within AppProvider');
+  return state;
+}
+
+function useAppDispatch() {
+  const dispatch = useContext(DispatchContext);
+  if (!dispatch) throw new Error('useAppDispatch must be used within AppProvider');
+  return dispatch;
+}
+```
+
+---
+
+## Summary
+
+`useReducer` excels when:
+- Multiple state values change together
+- The next state depends on the previous state in complex ways
+- You want to name your state transitions
+- You want to test state logic in isolation
+
+Think of actions as events in your domain, not instructions for how to update state.
+
+<HookCard
+  name="useReducer"
+  signature="const [state, dispatch] = useReducer(reducer, initial)"
+  description="Like useState but for complex state logic. Actions describe what happened; the reducer decides how state changes."
+  category="state"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Convert this useState code to useReducer:
+
+```tsx
+const [items, setItems] = useState<Item[]>([]);
+const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('all');
+
+const addItem = (text: string) => setItems([...items, { id: Date.now(), text, completed: false }]);
+const toggleItem = (id: number) => setItems(items.map(i => i.id === id ? { ...i, completed: !i.completed } : i));
+const setFilterValue = (f: 'all' | 'active' | 'completed') => setFilter(f);
+```
+
+### Core
+
+Build a shopping cart with useReducer:
+- Add items (with quantity)
+- Remove items
+- Update quantity
+- Apply discount code
+- Calculate total
+
+Model each operation as a named action.
+
+### Stretch
+
+Implement a multi-step wizard form with useReducer:
+- 3+ steps
+- Navigate forward/back
+- Validate before proceeding
+- Save progress on each step
+- Handle submission
+
+The state machine should prevent invalid transitions (can't go back from submitting, can't skip validation, etc.).

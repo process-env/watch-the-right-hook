@@ -1,0 +1,384 @@
+# useLayoutEffect & useInsertionEffect: Before the Paint
+
+`useEffect` runs after the browser paints. Usually that's what you want. But sometimes you need to run code *before* the user sees anything—measuring DOM elements, preventing flicker, or injecting styles. That's where `useLayoutEffect` and `useInsertionEffect` come in.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Know when useLayoutEffect is necessary
+- Understand the render → commit → paint timeline
+- Use useLayoutEffect for DOM measurements
+- Know when useInsertionEffect is needed (CSS-in-JS)
+- Avoid blocking the browser unnecessarily
+
+---
+
+## The Timing Difference
+
+All three effect hooks run after render, but at different points:
+
+```
+Component renders
+      ↓
+React commits changes to DOM
+      ↓
+useInsertionEffect runs    ← Inject styles (CSS-in-JS libraries)
+      ↓
+useLayoutEffect runs       ← Measure/mutate DOM
+      ↓
+Browser paints             ← User sees the result
+      ↓
+useEffect runs             ← Everything else
+```
+
+| Hook | Runs | Use Case |
+|------|------|----------|
+| `useInsertionEffect` | Before DOM mutations | CSS-in-JS style injection |
+| `useLayoutEffect` | After DOM mutations, before paint | DOM measurement, scroll position |
+| `useEffect` | After paint | Data fetching, subscriptions, most things |
+
+---
+
+## useLayoutEffect
+
+`useLayoutEffect` has the same signature as `useEffect`:
+
+```tsx
+useLayoutEffect(() => {
+  // Runs synchronously after DOM updates, before paint
+  return () => {
+    // Cleanup
+  };
+}, [dependencies]);
+```
+
+The key difference: it blocks the browser from painting until it completes.
+
+### When to Use It
+
+Use `useLayoutEffect` when you need to:
+
+1. **Measure DOM elements** before the user sees them
+2. **Mutate the DOM** and don't want flicker
+3. **Sync scroll position** or focus
+
+### Example: Tooltip Positioning
+
+```tsx
+function Tooltip({ anchorEl, children }: TooltipProps) {
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+
+  useLayoutEffect(() => {
+    if (!anchorEl || !tooltipRef.current) return;
+
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const tooltipRect = tooltipRef.current.getBoundingClientRect();
+
+    // Position below the anchor
+    setPosition({
+      top: anchorRect.bottom + 8,
+      left: anchorRect.left + (anchorRect.width - tooltipRect.width) / 2,
+    });
+  }, [anchorEl]);
+
+  return (
+    <div
+      ref={tooltipRef}
+      style={{
+        position: 'fixed',
+        top: position.top,
+        left: position.left,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+```
+
+If this used `useEffect`, users would see the tooltip at (0, 0) for a frame before it jumps to the correct position.
+
+### Example: Auto-Resize Textarea
+
+```tsx
+function AutoResizeTextarea(props: TextareaProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    // Reset height to measure scroll height correctly
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }); // No deps = run on every render
+
+  return <textarea ref={textareaRef} {...props} />;
+}
+```
+
+### Example: Scroll Restoration
+
+```tsx
+function ScrollToTop() {
+  const { pathname } = useLocation();
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+
+  return null;
+}
+```
+
+Using `useEffect` here would show the page at the old scroll position briefly before jumping to the top.
+
+---
+
+## The Flicker Problem
+
+Here's why `useLayoutEffect` exists:
+
+```tsx
+// ❌ useEffect: User sees intermediate state
+function BadTooltip({ targetRef }) {
+  const [rect, setRect] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    const r = targetRef.current.getBoundingClientRect();
+    setRect({ top: r.bottom, left: r.left });
+  }, []);
+
+  // Frame 1: Renders at (0, 0)
+  // Frame 2: User sees tooltip at (0, 0) briefly
+  // Frame 3: Effect runs, state updates
+  // Frame 4: Renders at correct position
+  return <div style={{ position: 'fixed', ...rect }}>Tooltip</div>;
+}
+
+// ✅ useLayoutEffect: No intermediate state visible
+function GoodTooltip({ targetRef }) {
+  const [rect, setRect] = useState({ top: 0, left: 0 });
+
+  useLayoutEffect(() => {
+    const r = targetRef.current.getBoundingClientRect();
+    setRect({ top: r.bottom, left: r.left });
+  }, []);
+
+  // Frame 1: Renders at (0, 0)
+  // (Effect runs, state updates, React re-renders)
+  // Frame 2: User sees tooltip at correct position
+  return <div style={{ position: 'fixed', ...rect }}>Tooltip</div>;
+}
+```
+
+---
+
+## Performance Warning
+
+`useLayoutEffect` blocks painting. If your effect is slow, the UI freezes:
+
+```tsx
+// ❌ Don't do expensive work in useLayoutEffect
+useLayoutEffect(() => {
+  const result = expensiveCalculation(); // Blocks paint!
+  setData(result);
+}, []);
+
+// ✅ Move expensive work to useEffect
+useEffect(() => {
+  const result = expensiveCalculation();
+  setData(result);
+}, []);
+```
+
+<Callout type="warning" title="Performance Impact">
+Only use `useLayoutEffect` when you actually need to prevent visual flicker. For most effects, `useEffect` is correct.
+</Callout>
+
+---
+
+## useInsertionEffect
+
+`useInsertionEffect` is even more specialized. It runs before `useLayoutEffect`, before React makes any DOM mutations.
+
+```tsx
+useInsertionEffect(() => {
+  // Runs before DOM mutations
+  // Cannot read DOM layout here
+}, []);
+```
+
+### The Only Use Case: CSS-in-JS
+
+`useInsertionEffect` exists for CSS-in-JS libraries like styled-components or Emotion. They need to inject `<style>` tags before any DOM reads happen.
+
+```tsx
+// This is what CSS-in-JS libraries do internally
+function useCSS(rule: string) {
+  useInsertionEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = rule;
+    document.head.appendChild(style);
+
+    return () => {
+      document.head.removeChild(style);
+    };
+  }, [rule]);
+}
+```
+
+### You Probably Don't Need It
+
+Unless you're building a CSS-in-JS library, use `useLayoutEffect` or `useEffect`.
+
+```tsx
+// ❌ Don't use useInsertionEffect for general DOM work
+useInsertionEffect(() => {
+  element.focus(); // Can't access DOM layout here
+}, []);
+
+// ✅ Use useLayoutEffect
+useLayoutEffect(() => {
+  element.focus();
+}, []);
+```
+
+---
+
+## Server-Side Rendering Considerations
+
+`useLayoutEffect` doesn't run on the server. If your component uses it, you'll see a warning during SSR.
+
+Solutions:
+
+### 1. Check for Browser Environment
+
+```tsx
+const useIsomorphicLayoutEffect =
+  typeof window !== 'undefined' ? useLayoutEffect : useEffect;
+
+function Component() {
+  useIsomorphicLayoutEffect(() => {
+    // ...
+  }, []);
+}
+```
+
+### 2. Suppress with useEffect First Render
+
+```tsx
+function Component() {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!mounted) return;
+    // DOM measurements here
+  }, [mounted]);
+}
+```
+
+### 3. Use Suspense Boundary
+
+Components that rely on DOM measurements often shouldn't SSR anyway:
+
+```tsx
+const DynamicTooltip = dynamic(() => import('./Tooltip'), {
+  ssr: false,
+});
+```
+
+---
+
+## Decision Guide
+
+```
+Need to sync with external system?
+├─ Yes → What timing?
+│   ├─ After paint (most cases) → useEffect
+│   ├─ Before paint (DOM measurement) → useLayoutEffect
+│   └─ Before DOM mutations (CSS injection) → useInsertionEffect
+└─ No → You might not need an effect
+```
+
+### Quick Reference
+
+| Task | Hook |
+|------|------|
+| Data fetching | `useEffect` |
+| Event subscriptions | `useEffect` |
+| Timers | `useEffect` |
+| DOM measurement | `useLayoutEffect` |
+| Prevent visual flicker | `useLayoutEffect` |
+| Scroll/focus sync | `useLayoutEffect` |
+| CSS-in-JS style injection | `useInsertionEffect` |
+
+---
+
+## Summary
+
+The three effect hooks serve different timing needs:
+
+- **useEffect**: After paint (default, non-blocking)
+- **useLayoutEffect**: Before paint (DOM measurements, flicker prevention)
+- **useInsertionEffect**: Before DOM mutations (CSS-in-JS only)
+
+Default to `useEffect`. Upgrade to `useLayoutEffect` only when you see flicker. You'll probably never need `useInsertionEffect`.
+
+<HookCard
+  name="useLayoutEffect"
+  signature="useLayoutEffect(() => { ... }, [deps])"
+  description="Like useEffect but runs synchronously before the browser paints. Use for DOM measurements and preventing visual flicker."
+  category="effect"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+This tooltip flickers. Fix it:
+
+```tsx
+function Tooltip({ anchor, children }) {
+  const ref = useRef();
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const rect = anchor.getBoundingClientRect();
+    setPos({ x: rect.left, y: rect.bottom });
+  }, [anchor]);
+
+  return <div ref={ref} style={{ position: 'fixed', left: pos.x, top: pos.y }}>{children}</div>;
+}
+```
+
+### Core
+
+Build a `useMeasure` hook that returns element dimensions:
+
+```tsx
+const [ref, { width, height }] = useMeasure<HTMLDivElement>();
+
+return <div ref={ref}>Size: {width} x {height}</div>;
+```
+
+- Updates when element resizes
+- Doesn't cause flicker
+- Uses ResizeObserver for efficiency
+
+### Stretch
+
+Create a virtualized list component that:
+- Only renders visible items
+- Measures row heights dynamically (variable height rows)
+- Maintains scroll position when items change
+- Uses `useLayoutEffect` appropriately for measurements
+- Doesn't flicker during scroll

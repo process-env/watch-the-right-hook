@@ -1,0 +1,441 @@
+# useOptimistic & useActionState: Optimistic UI and Server Actions
+
+React 19 introduced hooks for the request/response cycle. `useOptimistic` shows instant feedback while waiting for the server. `useActionState` tracks form submissions. Together, they make async UI feel synchronous.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Build optimistic UIs that update instantly
+- Handle form submissions with useActionState
+- Combine both hooks for responsive forms
+- Implement proper rollback when operations fail
+- Know when to use these vs. traditional patterns
+
+---
+
+## useOptimistic: Instant Feedback
+
+Users hate waiting. When they click "Like", they want to see the heart fill immediately—not after a 200ms network round trip.
+
+`useOptimistic` lets you show an optimistic state while the real operation happens in the background.
+
+```tsx
+const [optimisticState, addOptimistic] = useOptimistic(
+  state,
+  (currentState, optimisticValue) => nextState
+);
+```
+
+- `state`: The actual state (source of truth)
+- `optimisticState`: What to display (actual or optimistic)
+- `addOptimistic`: Function to trigger optimistic update
+
+```tsx
+function LikeButton({ postId, initialLiked }: { postId: string; initialLiked: boolean }) {
+  const [liked, setLiked] = useState(initialLiked);
+  const [optimisticLiked, addOptimisticLike] = useOptimistic(
+    liked,
+    (current, newValue: boolean) => newValue
+  );
+
+  const handleClick = async () => {
+    const newValue = !optimisticLiked;
+    addOptimisticLike(newValue);  // Instant UI update
+
+    try {
+      await toggleLike(postId);   // Actual API call
+      setLiked(newValue);         // Confirm the change
+    } catch (error) {
+      // Optimistic state automatically rolls back to `liked`
+      console.error('Failed to toggle like');
+    }
+  };
+
+  return (
+    <button onClick={handleClick}>
+      {optimisticLiked ? '❤️' : '🤍'}
+    </button>
+  );
+}
+```
+
+<Callout type="info" title="Automatic Rollback">
+When the action completes (success or failure), `optimisticState` syncs back to the actual `state`. If the server fails, the UI automatically reverts.
+</Callout>
+
+---
+
+## useActionState: Form Submission State
+
+`useActionState` manages the lifecycle of form submissions: idle → pending → success/error.
+
+```tsx
+const [state, formAction, isPending] = useActionState(
+  action,
+  initialState
+);
+```
+
+- `state`: Current state from the action (result, errors, etc.)
+- `formAction`: The action to use with `<form action={formAction}>`
+- `isPending`: Whether the action is in progress
+
+```tsx
+async function submitComment(prevState: State, formData: FormData) {
+  const text = formData.get('text') as string;
+
+  if (!text.trim()) {
+    return { error: 'Comment cannot be empty' };
+  }
+
+  try {
+    const comment = await api.createComment(text);
+    return { success: true, comment };
+  } catch (e) {
+    return { error: 'Failed to post comment' };
+  }
+}
+
+function CommentForm() {
+  const [state, formAction, isPending] = useActionState(submitComment, {});
+
+  return (
+    <form action={formAction}>
+      <textarea name="text" disabled={isPending} />
+      <button type="submit" disabled={isPending}>
+        {isPending ? 'Posting...' : 'Post Comment'}
+      </button>
+      {state.error && <p className="error">{state.error}</p>}
+      {state.success && <p className="success">Comment posted!</p>}
+    </form>
+  );
+}
+```
+
+---
+
+## Server Actions Integration
+
+`useActionState` works seamlessly with Server Actions in Next.js:
+
+```tsx
+// app/actions.ts
+'use server'
+
+export async function createPost(prevState: State, formData: FormData) {
+  const title = formData.get('title') as string;
+  const body = formData.get('body') as string;
+
+  // Validation
+  if (!title || !body) {
+    return { error: 'All fields required' };
+  }
+
+  // Database operation
+  const post = await db.post.create({ data: { title, body } });
+
+  // Revalidate and return
+  revalidatePath('/posts');
+  return { success: true, post };
+}
+```
+
+```tsx
+// app/posts/new/page.tsx
+'use client'
+
+import { createPost } from '../actions';
+
+export default function NewPostPage() {
+  const [state, formAction, isPending] = useActionState(createPost, {});
+
+  return (
+    <form action={formAction}>
+      <input name="title" placeholder="Title" />
+      <textarea name="body" placeholder="Body" />
+      <button disabled={isPending}>
+        {isPending ? 'Creating...' : 'Create Post'}
+      </button>
+      {state.error && <div className="error">{state.error}</div>}
+    </form>
+  );
+}
+```
+
+---
+
+## Combining Both: Optimistic Forms
+
+The real power comes from combining `useOptimistic` and `useActionState`:
+
+```tsx
+type Message = { id: string; text: string; sending?: boolean };
+
+async function sendMessage(prevState: State, formData: FormData) {
+  const text = formData.get('text') as string;
+  const message = await api.sendMessage(text);
+  return { messages: [...prevState.messages, message] };
+}
+
+function Chat() {
+  const [state, formAction, isPending] = useActionState(sendMessage, {
+    messages: initialMessages,
+  });
+
+  const [optimisticMessages, addOptimisticMessage] = useOptimistic(
+    state.messages,
+    (currentMessages, newMessage: Message) => [
+      ...currentMessages,
+      { ...newMessage, sending: true },
+    ]
+  );
+
+  const handleSubmit = async (formData: FormData) => {
+    const text = formData.get('text') as string;
+
+    // Show message instantly
+    addOptimisticMessage({
+      id: crypto.randomUUID(),
+      text,
+      sending: true,
+    });
+
+    // Then actually send it
+    formAction(formData);
+  };
+
+  return (
+    <div>
+      <ul>
+        {optimisticMessages.map(msg => (
+          <li key={msg.id} style={{ opacity: msg.sending ? 0.5 : 1 }}>
+            {msg.text}
+          </li>
+        ))}
+      </ul>
+
+      <form action={handleSubmit}>
+        <input name="text" />
+        <button>Send</button>
+      </form>
+    </div>
+  );
+}
+```
+
+<Callout type="tip" title="Visual Feedback">
+Mark optimistic items visually (opacity, spinner, "sending..." text) so users know the operation is in progress.
+</Callout>
+
+---
+
+## useFormStatus: Pending State in Children
+
+`useFormStatus` lets child components know if their parent form is submitting:
+
+```tsx
+import { useFormStatus } from 'react-dom';
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+
+  return (
+    <button type="submit" disabled={pending}>
+      {pending ? 'Submitting...' : 'Submit'}
+    </button>
+  );
+}
+
+function ContactForm() {
+  return (
+    <form action={submitForm}>
+      <input name="email" type="email" />
+      <textarea name="message" />
+      <SubmitButton />  {/* Automatically knows form is pending */}
+    </form>
+  );
+}
+```
+
+`useFormStatus` returns:
+- `pending`: Boolean, true while form is submitting
+- `data`: The FormData being submitted
+- `method`: The HTTP method
+- `action`: The action function
+
+---
+
+## Error Handling Patterns
+
+### Validation Errors
+
+Return errors from your action to display in the form:
+
+```tsx
+type State = {
+  errors?: {
+    email?: string;
+    password?: string;
+  };
+  message?: string;
+};
+
+async function login(prevState: State, formData: FormData): Promise<State> {
+  const email = formData.get('email') as string;
+  const password = formData.get('password') as string;
+
+  const errors: State['errors'] = {};
+
+  if (!email.includes('@')) {
+    errors.email = 'Invalid email';
+  }
+  if (password.length < 8) {
+    errors.password = 'Password must be at least 8 characters';
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return { errors };
+  }
+
+  try {
+    await authenticate(email, password);
+    redirect('/dashboard');
+  } catch {
+    return { message: 'Invalid credentials' };
+  }
+}
+
+function LoginForm() {
+  const [state, formAction, isPending] = useActionState(login, {});
+
+  return (
+    <form action={formAction}>
+      <div>
+        <input name="email" type="email" />
+        {state.errors?.email && <span>{state.errors.email}</span>}
+      </div>
+      <div>
+        <input name="password" type="password" />
+        {state.errors?.password && <span>{state.errors.password}</span>}
+      </div>
+      {state.message && <div className="error">{state.message}</div>}
+      <button disabled={isPending}>Log In</button>
+    </form>
+  );
+}
+```
+
+### Optimistic Rollback with Toast
+
+```tsx
+function TodoList() {
+  const [todos, setTodos] = useState<Todo[]>(initialTodos);
+  const [optimisticTodos, addOptimistic] = useOptimistic(
+    todos,
+    (current, action: { type: string; todo?: Todo; id?: string }) => {
+      switch (action.type) {
+        case 'add':
+          return [...current, action.todo!];
+        case 'delete':
+          return current.filter(t => t.id !== action.id);
+        default:
+          return current;
+      }
+    }
+  );
+
+  const handleDelete = async (id: string) => {
+    addOptimistic({ type: 'delete', id });
+
+    try {
+      await api.deleteTodo(id);
+      setTodos(todos.filter(t => t.id !== id));
+    } catch {
+      // Optimistic state reverts automatically
+      toast.error('Failed to delete. Please try again.');
+    }
+  };
+
+  return (
+    <ul>
+      {optimisticTodos.map(todo => (
+        <li key={todo.id}>
+          {todo.text}
+          <button onClick={() => handleDelete(todo.id)}>Delete</button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+---
+
+## When to Use These Hooks
+
+| Situation | Hook |
+|-----------|------|
+| Form submission to server | `useActionState` |
+| Instant feedback while waiting | `useOptimistic` |
+| Check pending in child component | `useFormStatus` |
+| Simple client-side form | `useState` still works |
+| Complex form with many fields | Consider form libraries + these hooks |
+
+---
+
+## Summary
+
+React 19's action hooks close the loop on the request/response cycle:
+
+- **useOptimistic**: Show changes instantly, roll back on failure
+- **useActionState**: Track form submission state cleanly
+- **useFormStatus**: Let children react to form state
+
+Together they enable UIs that feel instant while staying correct.
+
+<HookCard
+  name="useOptimistic + useActionState"
+  signature="useOptimistic(state, updateFn) + useActionState(action, initialState)"
+  description="Optimistic updates show instant feedback. Action state tracks form submission lifecycle. Combine them for responsive, correct async UI."
+  category="form"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Add optimistic UI to this like button:
+
+```tsx
+function LikeButton({ liked, onToggle }) {
+  return (
+    <button onClick={onToggle}>
+      {liked ? '❤️' : '🤍'}
+    </button>
+  );
+}
+```
+
+The heart should fill immediately when clicked, then revert if the server call fails.
+
+### Core
+
+Build an editable todo list with:
+- Optimistic add (appears instantly)
+- Optimistic delete (disappears instantly)
+- Optimistic toggle (strikes through instantly)
+- Toast notification on any failure
+- Automatic rollback
+
+### Stretch
+
+Create a comment system with:
+- `useActionState` for the submission form
+- `useOptimistic` to show the comment immediately
+- `useFormStatus` to disable the input while submitting
+- Server-side validation (min length, no spam words)
+- Edit and delete with optimistic updates
+- Nested replies

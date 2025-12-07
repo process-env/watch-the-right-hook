@@ -1,0 +1,987 @@
+# Domain Hooks in Practice
+
+The previous chapter covered design principles. This chapter puts them into practice with real-world domain hooks—authentication, data fetching, forms, media, and more. Each example demonstrates how to solve common problems while following the principles.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Build production-ready domain hooks
+- Handle complex async workflows
+- Manage WebSocket and real-time connections
+- Create form hooks with validation
+- Build hooks for browser APIs
+
+---
+
+## Authentication Hooks
+
+### useAuth
+
+A hook for managing authentication state:
+
+```tsx
+type User = {
+  id: string;
+  email: string;
+  name: string;
+};
+
+type AuthState =
+  | { status: 'loading' }
+  | { status: 'unauthenticated' }
+  | { status: 'authenticated'; user: User };
+
+type AuthActions = {
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  signup: (email: string, password: string, name: string) => Promise<void>;
+};
+
+function useAuth(): AuthState & AuthActions {
+  const [state, setState] = useState<AuthState>({ status: 'loading' });
+
+  // Check session on mount
+  useEffect(() => {
+    checkSession()
+      .then(user => {
+        setState(user ? { status: 'authenticated', user } : { status: 'unauthenticated' });
+      })
+      .catch(() => {
+        setState({ status: 'unauthenticated' });
+      });
+  }, []);
+
+  const login = useCallback(async (email: string, password: string) => {
+    const user = await authApi.login(email, password);
+    setState({ status: 'authenticated', user });
+  }, []);
+
+  const logout = useCallback(async () => {
+    await authApi.logout();
+    setState({ status: 'unauthenticated' });
+  }, []);
+
+  const signup = useCallback(async (email: string, password: string, name: string) => {
+    const user = await authApi.signup(email, password, name);
+    setState({ status: 'authenticated', user });
+  }, []);
+
+  return { ...state, login, logout, signup };
+}
+```
+
+### usePermissions
+
+Check user permissions:
+
+```tsx
+type Permission = 'read' | 'write' | 'admin';
+
+function usePermissions(requiredPermissions: Permission[]) {
+  const { status, user } = useAuth();
+
+  const permissions = useMemo(() => {
+    if (status !== 'authenticated') return [];
+    return user.permissions ?? [];
+  }, [status, user]);
+
+  const hasPermission = useCallback(
+    (permission: Permission) => permissions.includes(permission),
+    [permissions]
+  );
+
+  const hasAllPermissions = useMemo(
+    () => requiredPermissions.every(p => permissions.includes(p)),
+    [requiredPermissions, permissions]
+  );
+
+  const hasAnyPermission = useMemo(
+    () => requiredPermissions.some(p => permissions.includes(p)),
+    [requiredPermissions, permissions]
+  );
+
+  return {
+    permissions,
+    hasPermission,
+    hasAllPermissions,
+    hasAnyPermission,
+    isLoading: status === 'loading',
+  };
+}
+```
+
+---
+
+## Data Fetching Hooks
+
+### useFetch
+
+A basic fetch hook with caching:
+
+```tsx
+type FetchState<T> = {
+  data: T | null;
+  error: Error | null;
+  isLoading: boolean;
+  isValidating: boolean;
+};
+
+type FetchOptions = {
+  enabled?: boolean;
+  refetchInterval?: number;
+  onSuccess?: (data: unknown) => void;
+  onError?: (error: Error) => void;
+};
+
+const cache = new Map<string, unknown>();
+
+function useFetch<T>(
+  url: string | null,
+  options: FetchOptions = {}
+): FetchState<T> & { refetch: () => void } {
+  const { enabled = true, refetchInterval, onSuccess, onError } = options;
+
+  const [state, setState] = useState<FetchState<T>>({
+    data: (url ? cache.get(url) : null) as T | null,
+    error: null,
+    isLoading: !cache.has(url ?? ''),
+    isValidating: false,
+  });
+
+  const fetchData = useCallback(async () => {
+    if (!url) return;
+
+    setState(s => ({ ...s, isValidating: true }));
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const data = await response.json();
+      cache.set(url, data);
+
+      setState({ data, error: null, isLoading: false, isValidating: false });
+      onSuccess?.(data);
+    } catch (error) {
+      const err = error as Error;
+      setState(s => ({ ...s, error: err, isLoading: false, isValidating: false }));
+      onError?.(err);
+    }
+  }, [url, onSuccess, onError]);
+
+  useEffect(() => {
+    if (!enabled || !url) return;
+
+    fetchData();
+
+    if (refetchInterval) {
+      const interval = setInterval(fetchData, refetchInterval);
+      return () => clearInterval(interval);
+    }
+  }, [enabled, url, fetchData, refetchInterval]);
+
+  return { ...state, refetch: fetchData };
+}
+```
+
+### usePagination
+
+Handle paginated data:
+
+```tsx
+type UsePaginationOptions<T> = {
+  fetchPage: (page: number, pageSize: number) => Promise<{ data: T[]; total: number }>;
+  pageSize?: number;
+  initialPage?: number;
+};
+
+function usePagination<T>({
+  fetchPage,
+  pageSize = 10,
+  initialPage = 1,
+}: UsePaginationOptions<T>) {
+  const [page, setPage] = useState(initialPage);
+  const [data, setData] = useState<T[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const totalPages = Math.ceil(total / pageSize);
+  const hasNextPage = page < totalPages;
+  const hasPrevPage = page > 1;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+
+    fetchPage(page, pageSize)
+      .then(result => {
+        if (!cancelled) {
+          setData(result.data);
+          setTotal(result.total);
+          setError(null);
+        }
+      })
+      .catch(err => {
+        if (!cancelled) setError(err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page, pageSize, fetchPage]);
+
+  const goToPage = useCallback((p: number) => {
+    setPage(Math.max(1, Math.min(p, totalPages || 1)));
+  }, [totalPages]);
+
+  const nextPage = useCallback(() => {
+    if (hasNextPage) setPage(p => p + 1);
+  }, [hasNextPage]);
+
+  const prevPage = useCallback(() => {
+    if (hasPrevPage) setPage(p => p - 1);
+  }, [hasPrevPage]);
+
+  return {
+    data,
+    page,
+    pageSize,
+    total,
+    totalPages,
+    loading,
+    error,
+    hasNextPage,
+    hasPrevPage,
+    goToPage,
+    nextPage,
+    prevPage,
+  };
+}
+```
+
+### useInfiniteScroll
+
+Load data as user scrolls:
+
+```tsx
+type UseInfiniteScrollOptions<T> = {
+  fetchPage: (cursor: string | null) => Promise<{ data: T[]; nextCursor: string | null }>;
+  threshold?: number;
+};
+
+function useInfiniteScroll<T>({
+  fetchPage,
+  threshold = 200,
+}: UseInfiniteScrollOptions<T>) {
+  const [items, setItems] = useState<T[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const loadingRef = useRef(false);
+
+  const loadMore = useCallback(async () => {
+    if (loadingRef.current || !hasMore) return;
+
+    loadingRef.current = true;
+    setLoading(true);
+
+    try {
+      const result = await fetchPage(cursor);
+      setItems(prev => [...prev, ...result.data]);
+      setCursor(result.nextCursor);
+      setHasMore(result.nextCursor !== null);
+    } catch (err) {
+      setError(err as Error);
+    } finally {
+      setLoading(false);
+      loadingRef.current = false;
+    }
+  }, [cursor, hasMore, fetchPage]);
+
+  // Load first page
+  useEffect(() => {
+    loadMore();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll listener
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrollBottom =
+        document.documentElement.scrollHeight -
+        window.innerHeight -
+        window.scrollY;
+
+      if (scrollBottom < threshold) {
+        loadMore();
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [loadMore, threshold]);
+
+  const reset = useCallback(() => {
+    setItems([]);
+    setCursor(null);
+    setHasMore(true);
+    setError(null);
+  }, []);
+
+  return { items, loading, error, hasMore, loadMore, reset };
+}
+```
+
+---
+
+## Form Hooks
+
+### useForm
+
+A complete form management hook:
+
+```tsx
+type FieldError = {
+  type: string;
+  message: string;
+};
+
+type FormState<T> = {
+  values: T;
+  errors: Partial<Record<keyof T, FieldError>>;
+  touched: Partial<Record<keyof T, boolean>>;
+  isSubmitting: boolean;
+  isValid: boolean;
+  isDirty: boolean;
+};
+
+type UseFormOptions<T> = {
+  initialValues: T;
+  validate?: (values: T) => Partial<Record<keyof T, string>>;
+  onSubmit: (values: T) => Promise<void> | void;
+};
+
+function useForm<T extends Record<string, unknown>>({
+  initialValues,
+  validate,
+  onSubmit,
+}: UseFormOptions<T>) {
+  const [values, setValues] = useState<T>(initialValues);
+  const [errors, setErrors] = useState<Partial<Record<keyof T, FieldError>>>({});
+  const [touched, setTouched] = useState<Partial<Record<keyof T, boolean>>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const isDirty = useMemo(
+    () => JSON.stringify(values) !== JSON.stringify(initialValues),
+    [values, initialValues]
+  );
+
+  const isValid = useMemo(
+    () => Object.keys(errors).length === 0,
+    [errors]
+  );
+
+  const runValidation = useCallback((vals: T) => {
+    if (!validate) return {};
+
+    const validationErrors = validate(vals);
+    const fieldErrors: Partial<Record<keyof T, FieldError>> = {};
+
+    for (const [key, message] of Object.entries(validationErrors)) {
+      if (message) {
+        fieldErrors[key as keyof T] = { type: 'validation', message };
+      }
+    }
+
+    return fieldErrors;
+  }, [validate]);
+
+  const register = useCallback((name: keyof T) => ({
+    name: name as string,
+    value: values[name] as string,
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newValues = { ...values, [name]: e.target.value };
+      setValues(newValues);
+      setErrors(runValidation(newValues));
+    },
+    onBlur: () => {
+      setTouched(t => ({ ...t, [name]: true }));
+    },
+  }), [values, runValidation]);
+
+  const setValue = useCallback((name: keyof T, value: T[keyof T]) => {
+    const newValues = { ...values, [name]: value };
+    setValues(newValues);
+    setErrors(runValidation(newValues));
+  }, [values, runValidation]);
+
+  const handleSubmit = useCallback(
+    (e?: React.FormEvent) => {
+      e?.preventDefault();
+
+      const validationErrors = runValidation(values);
+      setErrors(validationErrors);
+
+      // Mark all as touched
+      const allTouched = Object.keys(values).reduce(
+        (acc, key) => ({ ...acc, [key]: true }),
+        {} as Record<keyof T, boolean>
+      );
+      setTouched(allTouched);
+
+      if (Object.keys(validationErrors).length > 0) return;
+
+      setIsSubmitting(true);
+
+      Promise.resolve(onSubmit(values)).finally(() => {
+        setIsSubmitting(false);
+      });
+    },
+    [values, runValidation, onSubmit]
+  );
+
+  const reset = useCallback(() => {
+    setValues(initialValues);
+    setErrors({});
+    setTouched({});
+    setIsSubmitting(false);
+  }, [initialValues]);
+
+  return {
+    values,
+    errors,
+    touched,
+    isSubmitting,
+    isValid,
+    isDirty,
+    register,
+    setValue,
+    handleSubmit,
+    reset,
+  };
+}
+```
+
+### useFieldArray
+
+Manage dynamic form arrays:
+
+```tsx
+function useFieldArray<T>(initialItems: T[] = []) {
+  const [fields, setFields] = useState<Array<{ id: string; value: T }>>(
+    () => initialItems.map(value => ({ id: crypto.randomUUID(), value }))
+  );
+
+  const append = useCallback((value: T) => {
+    setFields(f => [...f, { id: crypto.randomUUID(), value }]);
+  }, []);
+
+  const prepend = useCallback((value: T) => {
+    setFields(f => [{ id: crypto.randomUUID(), value }, ...f]);
+  }, []);
+
+  const remove = useCallback((index: number) => {
+    setFields(f => f.filter((_, i) => i !== index));
+  }, []);
+
+  const move = useCallback((from: number, to: number) => {
+    setFields(f => {
+      const result = [...f];
+      const [removed] = result.splice(from, 1);
+      result.splice(to, 0, removed);
+      return result;
+    });
+  }, []);
+
+  const update = useCallback((index: number, value: T) => {
+    setFields(f => f.map((field, i) =>
+      i === index ? { ...field, value } : field
+    ));
+  }, []);
+
+  const replace = useCallback((items: T[]) => {
+    setFields(items.map(value => ({ id: crypto.randomUUID(), value })));
+  }, []);
+
+  return {
+    fields,
+    append,
+    prepend,
+    remove,
+    move,
+    update,
+    replace,
+  };
+}
+```
+
+---
+
+## Real-Time Hooks
+
+### useWebSocket
+
+Manage WebSocket connections:
+
+```tsx
+type WebSocketState = 'connecting' | 'connected' | 'disconnected' | 'error';
+
+type UseWebSocketOptions = {
+  onOpen?: () => void;
+  onClose?: () => void;
+  onError?: (error: Event) => void;
+  onMessage?: (data: unknown) => void;
+  reconnect?: boolean;
+  reconnectInterval?: number;
+  reconnectAttempts?: number;
+};
+
+function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
+  const {
+    onOpen,
+    onClose,
+    onError,
+    onMessage,
+    reconnect = true,
+    reconnectInterval = 3000,
+    reconnectAttempts = 5,
+  } = options;
+
+  const [state, setState] = useState<WebSocketState>('connecting');
+  const [lastMessage, setLastMessage] = useState<unknown>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectCount = useRef(0);
+  const reconnectTimeout = useRef<number>();
+
+  const connect = useCallback(() => {
+    setState('connecting');
+
+    const ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      setState('connected');
+      reconnectCount.current = 0;
+      onOpen?.();
+    };
+
+    ws.onclose = () => {
+      setState('disconnected');
+      onClose?.();
+
+      if (reconnect && reconnectCount.current < reconnectAttempts) {
+        reconnectTimeout.current = window.setTimeout(() => {
+          reconnectCount.current++;
+          connect();
+        }, reconnectInterval);
+      }
+    };
+
+    ws.onerror = (event) => {
+      setState('error');
+      onError?.(event);
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      setLastMessage(data);
+      onMessage?.(data);
+    };
+
+    wsRef.current = ws;
+  }, [url, onOpen, onClose, onError, onMessage, reconnect, reconnectInterval, reconnectAttempts]);
+
+  useEffect(() => {
+    connect();
+
+    return () => {
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+      }
+      wsRef.current?.close();
+    };
+  }, [connect]);
+
+  const send = useCallback((data: unknown) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+    }
+  }, []);
+
+  const disconnect = useCallback(() => {
+    if (reconnectTimeout.current) {
+      clearTimeout(reconnectTimeout.current);
+    }
+    wsRef.current?.close();
+  }, []);
+
+  return {
+    state,
+    lastMessage,
+    send,
+    disconnect,
+    reconnect: connect,
+  };
+}
+```
+
+### useServerSentEvents
+
+Subscribe to Server-Sent Events:
+
+```tsx
+function useServerSentEvents<T>(url: string) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+
+  useEffect(() => {
+    const eventSource = new EventSource(url);
+
+    eventSource.onopen = () => {
+      setIsConnected(true);
+      setError(null);
+    };
+
+    eventSource.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        setData(parsed);
+      } catch {
+        setData(event.data as T);
+      }
+    };
+
+    eventSource.onerror = () => {
+      setIsConnected(false);
+      setError(new Error('Connection lost'));
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [url]);
+
+  return { data, error, isConnected };
+}
+```
+
+---
+
+## Browser API Hooks
+
+### useGeolocation
+
+Access user location:
+
+```tsx
+type GeolocationState = {
+  loading: boolean;
+  error: GeolocationPositionError | null;
+  position: {
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+  } | null;
+};
+
+function useGeolocation(options?: PositionOptions) {
+  const [state, setState] = useState<GeolocationState>({
+    loading: true,
+    error: null,
+    position: null,
+  });
+
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setState({
+        loading: false,
+        error: { code: 0, message: 'Geolocation not supported' } as GeolocationPositionError,
+        position: null,
+      });
+      return;
+    }
+
+    const handleSuccess = (position: GeolocationPosition) => {
+      setState({
+        loading: false,
+        error: null,
+        position: {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        },
+      });
+    };
+
+    const handleError = (error: GeolocationPositionError) => {
+      setState({ loading: false, error, position: null });
+    };
+
+    const watchId = navigator.geolocation.watchPosition(
+      handleSuccess,
+      handleError,
+      options
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [options]);
+
+  return state;
+}
+```
+
+### useClipboard
+
+Copy and read clipboard:
+
+```tsx
+function useClipboard(timeout = 2000) {
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const timeoutRef = useRef<number>();
+
+  const copy = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setError(null);
+
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+
+      timeoutRef.current = window.setTimeout(() => {
+        setCopied(false);
+      }, timeout);
+    } catch (err) {
+      setError(err as Error);
+      setCopied(false);
+    }
+  }, [timeout]);
+
+  const read = useCallback(async () => {
+    try {
+      return await navigator.clipboard.readText();
+    } catch (err) {
+      setError(err as Error);
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  return { copy, read, copied, error };
+}
+```
+
+### useOnlineStatus
+
+Track network connectivity:
+
+```tsx
+function useOnlineStatus() {
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  return isOnline;
+}
+```
+
+### useDocumentVisibility
+
+React to tab visibility:
+
+```tsx
+function useDocumentVisibility() {
+  const [isVisible, setIsVisible] = useState(
+    typeof document !== 'undefined' ? document.visibilityState === 'visible' : true
+  );
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsVisible(document.visibilityState === 'visible');
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  return isVisible;
+}
+```
+
+---
+
+## Storage Hooks
+
+### useLocalStorage
+
+Persist state to localStorage:
+
+```tsx
+function useLocalStorage<T>(
+  key: string,
+  initialValue: T
+): [T, (value: T | ((prev: T) => T)) => void, () => void] {
+  const [storedValue, setStoredValue] = useState<T>(() => {
+    if (typeof window === 'undefined') return initialValue;
+
+    try {
+      const item = localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  const setValue = useCallback(
+    (value: T | ((prev: T) => T)) => {
+      setStoredValue(prev => {
+        const valueToStore = value instanceof Function ? value(prev) : value;
+
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(key, JSON.stringify(valueToStore));
+        }
+
+        return valueToStore;
+      });
+    },
+    [key]
+  );
+
+  const removeValue = useCallback(() => {
+    setStoredValue(initialValue);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(key);
+    }
+  }, [key, initialValue]);
+
+  // Sync across tabs
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === key && e.newValue !== null) {
+        setStoredValue(JSON.parse(e.newValue));
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [key]);
+
+  return [storedValue, setValue, removeValue];
+}
+```
+
+---
+
+## Summary
+
+Domain hooks encapsulate real-world complexity:
+
+| Category | Hooks |
+|----------|-------|
+| Auth | useAuth, usePermissions |
+| Data | useFetch, usePagination, useInfiniteScroll |
+| Forms | useForm, useFieldArray |
+| Real-time | useWebSocket, useServerSentEvents |
+| Browser | useGeolocation, useClipboard, useOnlineStatus |
+| Storage | useLocalStorage, useSessionStorage |
+
+Key patterns across all:
+- Clear state types (often discriminated unions)
+- Proper cleanup in effects
+- Stable callback references
+- Error handling
+- Loading states
+
+<HookCard
+  name="Domain Hooks"
+  signature="function useDomain(config): State & Actions"
+  description="Domain hooks encapsulate complex stateful logic for specific use cases. They handle async workflows, subscriptions, browser APIs, and persistence while exposing clean, focused APIs."
+  category="pattern"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Create a `useCountdown` hook:
+
+```tsx
+const { seconds, isRunning, start, pause, reset } = useCountdown(60);
+
+// Counts down from 60 to 0
+// Stops when reaching 0
+// start/pause/reset controls
+```
+
+### Core
+
+Build a `useAsync` hook for any async function:
+
+```tsx
+const { execute, data, error, status } = useAsync(async (userId: string) => {
+  const response = await fetch(`/api/users/${userId}`);
+  return response.json();
+});
+
+// execute(userId) triggers the async function
+// status: 'idle' | 'pending' | 'success' | 'error'
+// Handles race conditions
+// Supports cancellation
+```
+
+### Stretch
+
+Create a `usePersistentReducer` hook:
+
+```tsx
+const [state, dispatch] = usePersistentReducer(
+  'app-state',
+  reducer,
+  initialState,
+  {
+    storage: 'localStorage', // or 'sessionStorage' or 'indexedDB'
+    debounce: 1000, // debounce writes
+    migrate: (oldState, version) => newState, // handle schema changes
+    version: 2,
+  }
+);
+
+// State persists across page reloads
+// Handles storage errors gracefully
+// Syncs across tabs (for localStorage)
+// Supports migration from old versions
+```

@@ -1,0 +1,693 @@
+# End-to-End Form Patterns
+
+Forms are where users interact most with your app. This chapter brings together everything from the previous chapters—`useState`, `useReducer`, `useActionState`, `useFormStatus`, and `useOptimistic`—into complete, production-ready patterns.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Build complete form flows from input to server response
+- Handle validation at multiple levels (client, server, real-time)
+- Implement optimistic updates for form submissions
+- Manage complex multi-step forms
+- Handle file uploads with progress
+
+---
+
+## Pattern 1: Simple Contact Form
+
+The foundation—a form that submits to a server action with validation and feedback.
+
+```tsx
+'use server'
+
+type FormState = {
+  success?: boolean;
+  error?: string;
+  errors?: {
+    name?: string;
+    email?: string;
+    message?: string;
+  };
+};
+
+export async function submitContact(
+  prevState: FormState,
+  formData: FormData
+): Promise<FormState> {
+  const name = formData.get('name') as string;
+  const email = formData.get('email') as string;
+  const message = formData.get('message') as string;
+
+  // Server-side validation
+  const errors: FormState['errors'] = {};
+
+  if (!name || name.length < 2) {
+    errors.name = 'Name must be at least 2 characters';
+  }
+  if (!email || !email.includes('@')) {
+    errors.email = 'Valid email required';
+  }
+  if (!message || message.length < 10) {
+    errors.message = 'Message must be at least 10 characters';
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return { errors };
+  }
+
+  // Submit to your backend
+  await db.contact.create({ data: { name, email, message } });
+
+  return { success: true };
+}
+```
+
+```tsx
+'use client'
+
+import { submitContact } from './actions';
+
+function ContactForm() {
+  const [state, formAction] = useActionState(submitContact, {});
+
+  if (state.success) {
+    return (
+      <div className="success">
+        Thanks for your message! We'll be in touch.
+      </div>
+    );
+  }
+
+  return (
+    <form action={formAction} className="space-y-4">
+      <FormField
+        name="name"
+        label="Name"
+        error={state.errors?.name}
+      />
+      <FormField
+        name="email"
+        type="email"
+        label="Email"
+        error={state.errors?.email}
+      />
+      <FormField
+        name="message"
+        as="textarea"
+        label="Message"
+        error={state.errors?.message}
+      />
+      <SubmitButton>Send Message</SubmitButton>
+      {state.error && <p className="error">{state.error}</p>}
+    </form>
+  );
+}
+
+// Reusable field component
+function FormField({
+  name,
+  label,
+  error,
+  as: Component = 'input',
+  ...props
+}: {
+  name: string;
+  label: string;
+  error?: string;
+  as?: 'input' | 'textarea' | 'select';
+} & React.InputHTMLAttributes<HTMLInputElement>) {
+  const { pending } = useFormStatus();
+  const id = `field-${name}`;
+
+  return (
+    <div>
+      <label htmlFor={id}>{label}</label>
+      <Component
+        id={id}
+        name={name}
+        disabled={pending}
+        aria-invalid={!!error}
+        aria-describedby={error ? `${id}-error` : undefined}
+        {...props}
+      />
+      {error && (
+        <p id={`${id}-error`} className="error">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## Pattern 2: Real-Time Validation
+
+Validate as users type while still using form actions for submission.
+
+```tsx
+function SignupForm() {
+  const [state, formAction] = useActionState(createAccount, {});
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  // Client-side validation (real-time feedback)
+  const emailError = email && !email.includes('@') ? 'Invalid email' : null;
+  const passwordError = password && password.length < 8
+    ? 'Password must be at least 8 characters'
+    : null;
+
+  const hasClientErrors = !!(emailError || passwordError);
+
+  return (
+    <form action={formAction}>
+      <div>
+        <input
+          name="email"
+          type="email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          aria-invalid={!!(emailError || state.errors?.email)}
+        />
+        {/* Show client error while typing, server error after submit */}
+        {emailError || state.errors?.email}
+      </div>
+
+      <div>
+        <input
+          name="password"
+          type="password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          aria-invalid={!!(passwordError || state.errors?.password)}
+        />
+        {passwordError || state.errors?.password}
+      </div>
+
+      {/* Disable submit if client validation fails */}
+      <SubmitButton disabled={hasClientErrors || !email || !password}>
+        Create Account
+      </SubmitButton>
+    </form>
+  );
+}
+```
+
+---
+
+## Pattern 3: Optimistic Todo List
+
+Instant feedback for CRUD operations.
+
+```tsx
+type Todo = {
+  id: string;
+  text: string;
+  completed: boolean;
+  pending?: boolean;
+};
+
+function TodoApp() {
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [optimisticTodos, updateOptimistic] = useOptimistic(
+    todos,
+    (state, action: { type: string; payload: any }) => {
+      switch (action.type) {
+        case 'add':
+          return [...state, { ...action.payload, pending: true }];
+        case 'toggle':
+          return state.map(t =>
+            t.id === action.payload
+              ? { ...t, completed: !t.completed, pending: true }
+              : t
+          );
+        case 'delete':
+          return state.filter(t => t.id !== action.payload);
+        default:
+          return state;
+      }
+    }
+  );
+
+  const addTodo = async (formData: FormData) => {
+    const text = formData.get('text') as string;
+    const tempId = crypto.randomUUID();
+
+    // Optimistic update
+    updateOptimistic({
+      type: 'add',
+      payload: { id: tempId, text, completed: false },
+    });
+
+    try {
+      const todo = await api.createTodo(text);
+      setTodos(prev => [...prev, todo]);
+    } catch {
+      toast.error('Failed to add todo');
+      // Optimistic state auto-reverts
+    }
+  };
+
+  const toggleTodo = async (id: string) => {
+    updateOptimistic({ type: 'toggle', payload: id });
+
+    try {
+      await api.toggleTodo(id);
+      setTodos(prev =>
+        prev.map(t => (t.id === id ? { ...t, completed: !t.completed } : t))
+      );
+    } catch {
+      toast.error('Failed to update todo');
+    }
+  };
+
+  const deleteTodo = async (id: string) => {
+    updateOptimistic({ type: 'delete', payload: id });
+
+    try {
+      await api.deleteTodo(id);
+      setTodos(prev => prev.filter(t => t.id !== id));
+    } catch {
+      toast.error('Failed to delete todo');
+    }
+  };
+
+  return (
+    <div>
+      <form action={addTodo}>
+        <input name="text" placeholder="What needs doing?" />
+        <SubmitButton>Add</SubmitButton>
+      </form>
+
+      <ul>
+        {optimisticTodos.map(todo => (
+          <li
+            key={todo.id}
+            style={{ opacity: todo.pending ? 0.6 : 1 }}
+          >
+            <input
+              type="checkbox"
+              checked={todo.completed}
+              onChange={() => toggleTodo(todo.id)}
+            />
+            <span className={todo.completed ? 'line-through' : ''}>
+              {todo.text}
+            </span>
+            <button onClick={() => deleteTodo(todo.id)}>Delete</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+---
+
+## Pattern 4: Multi-Step Form with State Machine
+
+Complex forms benefit from useReducer to manage flow.
+
+```tsx
+type WizardState =
+  | { step: 'personal'; data: Partial<FormData> }
+  | { step: 'address'; data: Partial<FormData> }
+  | { step: 'payment'; data: Partial<FormData> }
+  | { step: 'review'; data: FormData }
+  | { step: 'submitting'; data: FormData }
+  | { step: 'success'; orderId: string }
+  | { step: 'error'; data: FormData; error: string };
+
+type WizardAction =
+  | { type: 'NEXT'; data: Partial<FormData> }
+  | { type: 'BACK' }
+  | { type: 'SUBMIT' }
+  | { type: 'SUCCESS'; orderId: string }
+  | { type: 'ERROR'; error: string }
+  | { type: 'RETRY' };
+
+function wizardReducer(state: WizardState, action: WizardAction): WizardState {
+  switch (action.type) {
+    case 'NEXT':
+      const newData = { ...state.data, ...action.data };
+      switch (state.step) {
+        case 'personal':
+          return { step: 'address', data: newData };
+        case 'address':
+          return { step: 'payment', data: newData };
+        case 'payment':
+          return { step: 'review', data: newData as FormData };
+        default:
+          return state;
+      }
+
+    case 'BACK':
+      switch (state.step) {
+        case 'address':
+          return { step: 'personal', data: state.data };
+        case 'payment':
+          return { step: 'address', data: state.data };
+        case 'review':
+          return { step: 'payment', data: state.data };
+        case 'error':
+          return { step: 'review', data: state.data };
+        default:
+          return state;
+      }
+
+    case 'SUBMIT':
+      if (state.step === 'review') {
+        return { step: 'submitting', data: state.data };
+      }
+      return state;
+
+    case 'SUCCESS':
+      return { step: 'success', orderId: action.orderId };
+
+    case 'ERROR':
+      if (state.step === 'submitting') {
+        return { step: 'error', data: state.data, error: action.error };
+      }
+      return state;
+
+    case 'RETRY':
+      if (state.step === 'error') {
+        return { step: 'submitting', data: state.data };
+      }
+      return state;
+
+    default:
+      return state;
+  }
+}
+
+function CheckoutWizard() {
+  const [state, dispatch] = useReducer(wizardReducer, {
+    step: 'personal',
+    data: {},
+  });
+
+  const handleSubmit = async () => {
+    dispatch({ type: 'SUBMIT' });
+    try {
+      const order = await api.createOrder(state.data);
+      dispatch({ type: 'SUCCESS', orderId: order.id });
+    } catch (e) {
+      dispatch({ type: 'ERROR', error: e.message });
+    }
+  };
+
+  return (
+    <div>
+      <StepIndicator
+        steps={['Personal', 'Address', 'Payment', 'Review']}
+        current={state.step}
+      />
+
+      {state.step === 'personal' && (
+        <PersonalInfoStep
+          data={state.data}
+          onNext={data => dispatch({ type: 'NEXT', data })}
+        />
+      )}
+
+      {state.step === 'address' && (
+        <AddressStep
+          data={state.data}
+          onNext={data => dispatch({ type: 'NEXT', data })}
+          onBack={() => dispatch({ type: 'BACK' })}
+        />
+      )}
+
+      {state.step === 'payment' && (
+        <PaymentStep
+          data={state.data}
+          onNext={data => dispatch({ type: 'NEXT', data })}
+          onBack={() => dispatch({ type: 'BACK' })}
+        />
+      )}
+
+      {state.step === 'review' && (
+        <ReviewStep
+          data={state.data}
+          onSubmit={handleSubmit}
+          onBack={() => dispatch({ type: 'BACK' })}
+        />
+      )}
+
+      {state.step === 'submitting' && <LoadingScreen />}
+
+      {state.step === 'success' && (
+        <SuccessScreen orderId={state.orderId} />
+      )}
+
+      {state.step === 'error' && (
+        <ErrorScreen
+          error={state.error}
+          onRetry={() => dispatch({ type: 'RETRY' })}
+          onBack={() => dispatch({ type: 'BACK' })}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## Pattern 5: File Upload with Progress
+
+Handle file uploads with visual progress feedback.
+
+```tsx
+function FileUpload() {
+  const [files, setFiles] = useState<File[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [uploadedUrls, setUploadedUrls] = useState<string[]>([]);
+
+  const handleFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newFiles = Array.from(e.target.files || []);
+    setFiles(prev => [...prev, ...newFiles]);
+  };
+
+  const uploadFile = async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    return new Promise<string>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+
+      xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable) {
+          const progress = Math.round((e.loaded / e.total) * 100);
+          setUploadProgress(prev => ({ ...prev, [file.name]: progress }));
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 200) {
+          const { url } = JSON.parse(xhr.responseText);
+          resolve(url);
+        } else {
+          reject(new Error('Upload failed'));
+        }
+      });
+
+      xhr.addEventListener('error', () => reject(new Error('Upload failed')));
+
+      xhr.open('POST', '/api/upload');
+      xhr.send(formData);
+    });
+  };
+
+  const handleUpload = async () => {
+    const urls: string[] = [];
+
+    for (const file of files) {
+      try {
+        const url = await uploadFile(file);
+        urls.push(url);
+      } catch (error) {
+        toast.error(`Failed to upload ${file.name}`);
+      }
+    }
+
+    setUploadedUrls(urls);
+    setFiles([]);
+    setUploadProgress({});
+  };
+
+  return (
+    <div>
+      <input
+        type="file"
+        multiple
+        onChange={handleFilesSelected}
+        accept="image/*"
+      />
+
+      <ul>
+        {files.map(file => (
+          <li key={file.name}>
+            {file.name}
+            {uploadProgress[file.name] !== undefined && (
+              <progress value={uploadProgress[file.name]} max={100} />
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {files.length > 0 && (
+        <button onClick={handleUpload}>Upload {files.length} files</button>
+      )}
+
+      {uploadedUrls.length > 0 && (
+        <div>
+          <h3>Uploaded:</h3>
+          {uploadedUrls.map(url => (
+            <img key={url} src={url} alt="" width={100} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## Pattern 6: Inline Editing
+
+Edit in place without navigating away.
+
+```tsx
+function EditableTitle({ initialTitle, onSave }: {
+  initialTitle: string;
+  onSave: (title: string) => Promise<void>;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [title, setTitle] = useState(initialTitle);
+  const [optimisticTitle, setOptimisticTitle] = useOptimistic(initialTitle);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isEditing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [isEditing]);
+
+  const handleSave = async () => {
+    if (title === initialTitle) {
+      setIsEditing(false);
+      return;
+    }
+
+    setOptimisticTitle(title);
+    setIsEditing(false);
+
+    try {
+      await onSave(title);
+    } catch {
+      setTitle(initialTitle);
+      toast.error('Failed to save');
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSave();
+    } else if (e.key === 'Escape') {
+      setTitle(initialTitle);
+      setIsEditing(false);
+    }
+  };
+
+  if (isEditing) {
+    return (
+      <input
+        ref={inputRef}
+        value={title}
+        onChange={e => setTitle(e.target.value)}
+        onBlur={handleSave}
+        onKeyDown={handleKeyDown}
+      />
+    );
+  }
+
+  return (
+    <h1
+      onClick={() => setIsEditing(true)}
+      className="cursor-pointer hover:bg-gray-100"
+      title="Click to edit"
+    >
+      {optimisticTitle}
+    </h1>
+  );
+}
+```
+
+---
+
+## Summary
+
+Form patterns in React 19 combine multiple hooks:
+
+| Pattern | Hooks Used |
+|---------|------------|
+| Simple form | `useActionState`, `useFormStatus` |
+| Real-time validation | `useState` + `useActionState` |
+| Optimistic CRUD | `useOptimistic` + `useState` |
+| Multi-step wizard | `useReducer` |
+| File upload | `useState` + refs |
+| Inline editing | `useState` + `useOptimistic` + `useRef` |
+
+The right pattern depends on your UX requirements. Start simple and add complexity only as needed.
+
+<HookCard
+  name="Form Patterns"
+  signature="useActionState + useFormStatus + useOptimistic"
+  description="React 19's form hooks combine to create responsive, accessible forms. Use the pattern that matches your complexity level."
+  category="form"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Add error handling and a reset button to this form:
+
+```tsx
+function NewsletterForm() {
+  const [state, action] = useActionState(subscribe, {});
+  return (
+    <form action={action}>
+      <input name="email" type="email" />
+      <SubmitButton>Subscribe</SubmitButton>
+    </form>
+  );
+}
+```
+
+### Core
+
+Build an address form that:
+- Has real-time validation for ZIP code format
+- Auto-fills city/state when ZIP is entered (mock API)
+- Submits via server action
+- Shows optimistic "Saved" state
+- Has proper accessibility
+
+### Stretch
+
+Create an invoice builder with:
+- Dynamic line items (add/remove rows)
+- Real-time total calculation
+- Optimistic save (saves as you type, debounced)
+- Conflict resolution (if server has newer version)
+- PDF preview generation
+- Full keyboard navigation

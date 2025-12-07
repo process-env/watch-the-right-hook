@@ -1,0 +1,696 @@
+# Custom Hook Design Principles
+
+Custom hooks are React's composition primitive. They let you extract and share stateful logic without changing component hierarchy. But a poorly designed hook can be worse than no hook at all. This chapter covers the principles that make hooks reusable, testable, and maintainable.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Understand what makes a good custom hook
+- Know when to extract logic into a hook
+- Design hooks with clear contracts and minimal API surface
+- Handle dependencies and configuration properly
+- Avoid common custom hook mistakes
+
+---
+
+## What Is a Custom Hook?
+
+A custom hook is a function that:
+1. Starts with `use`
+2. Can call other hooks
+3. Returns values and/or functions
+
+```tsx
+function useCounter(initialValue = 0) {
+  const [count, setCount] = useState(initialValue);
+
+  const increment = useCallback(() => setCount(c => c + 1), []);
+  const decrement = useCallback(() => setCount(c => c - 1), []);
+  const reset = useCallback(() => setCount(initialValue), [initialValue]);
+
+  return { count, increment, decrement, reset };
+}
+```
+
+Custom hooks are just functions. They follow the same rules as built-in hooks and compose the same way.
+
+---
+
+## When to Extract a Hook
+
+### Extract When: Logic Is Reused
+
+```tsx
+// Before: Duplicated in multiple components
+function UserProfile() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetchUser().then(setUser).catch(setError).finally(() => setLoading(false));
+  }, []);
+
+  // ...
+}
+
+function UserSettings() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetchUser().then(setUser).catch(setError).finally(() => setLoading(false));
+  }, []);
+
+  // ...
+}
+
+// After: Extracted hook
+function useUser() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    fetchUser()
+      .then(setUser)
+      .catch(setError)
+      .finally(() => setLoading(false));
+  }, []);
+
+  return { user, loading, error };
+}
+```
+
+### Extract When: Logic Is Complex
+
+Even without reuse, complex logic benefits from extraction:
+
+```tsx
+// Before: Component is hard to follow
+function Chat() {
+  const [messages, setMessages] = useState([]);
+  const [socket, setSocket] = useState(null);
+  const [connected, setConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+
+  useEffect(() => {
+    const ws = new WebSocket(url);
+    ws.onopen = () => { setConnected(true); setReconnecting(false); };
+    ws.onclose = () => { setConnected(false); /* reconnect logic */ };
+    ws.onmessage = (e) => setMessages(m => [...m, JSON.parse(e.data)]);
+    setSocket(ws);
+    return () => ws.close();
+  }, [url]);
+
+  // More WebSocket logic...
+
+  return <MessageList messages={messages} />;
+}
+
+// After: Clear separation of concerns
+function Chat() {
+  const { messages, connected, send } = useWebSocket(url);
+
+  return <MessageList messages={messages} />;
+}
+```
+
+### Don't Extract When: It's Just One useState
+
+```tsx
+// ❌ Over-abstraction: This is just useState
+function useVisible() {
+  const [visible, setVisible] = useState(false);
+  return { visible, setVisible };
+}
+
+// ✅ Just use useState directly
+const [visible, setVisible] = useState(false);
+```
+
+### Don't Extract When: Logic Isn't Reusable
+
+```tsx
+// ❌ Too specific: Only works for this exact use case
+function useUserProfileFormWithValidationAndAutoSave() {
+  // 200 lines of very specific logic
+}
+
+// ✅ Extract smaller, composable hooks
+function useForm(schema) { /* generic form logic */ }
+function useAutoSave(data, save) { /* generic auto-save */ }
+```
+
+---
+
+## Design Principle 1: Single Responsibility
+
+Each hook should do one thing well:
+
+```tsx
+// ❌ Does too much
+function useEverything() {
+  const user = useUser();
+  const theme = useTheme();
+  const notifications = useNotifications();
+  const analytics = useAnalytics();
+
+  return { user, theme, notifications, analytics };
+}
+
+// ✅ Separate concerns
+function useUser() { /* user logic */ }
+function useTheme() { /* theme logic */ }
+function useNotifications() { /* notification logic */ }
+```
+
+A hook should have one reason to change. If you're combining unrelated concerns, keep them as separate hooks.
+
+---
+
+## Design Principle 2: Minimal API Surface
+
+Return only what consumers need:
+
+```tsx
+// ❌ Exposes too much
+function useForm() {
+  const [values, setValues] = useState({});
+  const [errors, setErrors] = useState({});
+  const [touched, setTouched] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitCount, setSubmitCount] = useState(0);
+  const [isValidating, setIsValidating] = useState(false);
+
+  return {
+    values, setValues,
+    errors, setErrors,
+    touched, setTouched,
+    isSubmitting, setIsSubmitting,
+    submitCount, setSubmitCount,
+    isValidating, setIsValidating,
+    // ... more internal state
+  };
+}
+
+// ✅ Expose a clean API
+function useForm<T>(config: FormConfig<T>) {
+  // Internal state...
+
+  return {
+    values,
+    errors,
+    isSubmitting,
+    // Actions (not raw setters)
+    register: (name: keyof T) => ({ /* input props */ }),
+    handleSubmit: (onSubmit: (data: T) => void) => (e: FormEvent) => { /* ... */ },
+    reset: () => { /* ... */ },
+  };
+}
+```
+
+<Callout type="tip" title="Actions Over Setters">
+Return actions (functions that do something meaningful) rather than raw state setters. This encapsulates implementation details and makes the API clearer.
+</Callout>
+
+---
+
+## Design Principle 3: Predictable Returns
+
+Be consistent in what you return:
+
+```tsx
+// ❌ Inconsistent return shape
+function useFetch(url) {
+  // Sometimes returns data
+  if (data) return data;
+  // Sometimes returns loading state
+  if (loading) return { loading: true };
+  // Sometimes returns error
+  if (error) return { error };
+}
+
+// ✅ Consistent return shape
+function useFetch<T>(url: string) {
+  const [state, setState] = useState<{
+    data: T | null;
+    loading: boolean;
+    error: Error | null;
+  }>({
+    data: null,
+    loading: true,
+    error: null,
+  });
+
+  // Always returns same shape
+  return state;
+}
+```
+
+### Tuple vs Object Returns
+
+```tsx
+// Tuple: Good for simple hooks with 2-3 values
+function useToggle(initial = false) {
+  const [value, setValue] = useState(initial);
+  const toggle = useCallback(() => setValue(v => !v), []);
+
+  return [value, toggle] as const;
+}
+
+// Usage: Easy destructuring with custom names
+const [isOpen, toggleOpen] = useToggle();
+const [isDark, toggleTheme] = useToggle();
+
+// Object: Good for complex hooks with many values
+function useQuery<T>(key: string) {
+  return {
+    data,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    // ...
+  };
+}
+
+// Usage: Pick what you need
+const { data, isLoading } = useQuery('users');
+```
+
+---
+
+## Design Principle 4: Flexible Configuration
+
+Accept configuration via parameters, not hardcoding:
+
+```tsx
+// ❌ Hardcoded behavior
+function useDebounce(value) {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), 300); // Hardcoded!
+    return () => clearTimeout(timer);
+  }, [value]);
+
+  return debounced;
+}
+
+// ✅ Configurable
+function useDebounce<T>(value: T, delay: number) {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debounced;
+}
+```
+
+### Options Objects for Many Parameters
+
+```tsx
+// ❌ Too many positional arguments
+function useInfiniteScroll(
+  fetchFn,
+  pageSize,
+  threshold,
+  initialPage,
+  enabled,
+  onError
+) {
+  // ...
+}
+
+// ✅ Options object
+type UseInfiniteScrollOptions<T> = {
+  fetchPage: (page: number) => Promise<T[]>;
+  pageSize?: number;
+  threshold?: number;
+  initialPage?: number;
+  enabled?: boolean;
+  onError?: (error: Error) => void;
+};
+
+function useInfiniteScroll<T>(options: UseInfiniteScrollOptions<T>) {
+  const {
+    fetchPage,
+    pageSize = 20,
+    threshold = 200,
+    initialPage = 0,
+    enabled = true,
+    onError,
+  } = options;
+
+  // ...
+}
+```
+
+---
+
+## Design Principle 5: Stable References
+
+Memoize callbacks and objects that consumers might use in dependency arrays:
+
+```tsx
+// ❌ Unstable references
+function useSearch() {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+
+  // New function every render!
+  const search = (q: string) => {
+    setQuery(q);
+    fetchResults(q).then(setResults);
+  };
+
+  // New object every render!
+  return { query, results, search };
+}
+
+// ✅ Stable references
+function useSearch() {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<Result[]>([]);
+
+  const search = useCallback((q: string) => {
+    setQuery(q);
+    fetchResults(q).then(setResults);
+  }, []);
+
+  // Object is still new, but properties are stable
+  return { query, results, search };
+}
+```
+
+For the return object itself, you generally don't need to memoize it—consumers destructure and use individual properties.
+
+---
+
+## Design Principle 6: Handle Cleanup
+
+If your hook sets up subscriptions or timers, clean them up:
+
+```tsx
+function useEventListener<K extends keyof WindowEventMap>(
+  eventName: K,
+  handler: (event: WindowEventMap[K]) => void,
+  element: HTMLElement | Window = window
+) {
+  const savedHandler = useRef(handler);
+
+  useEffect(() => {
+    savedHandler.current = handler;
+  }, [handler]);
+
+  useEffect(() => {
+    const listener = (event: WindowEventMap[K]) => savedHandler.current(event);
+
+    element.addEventListener(eventName, listener);
+
+    // Cleanup!
+    return () => {
+      element.removeEventListener(eventName, listener);
+    };
+  }, [eventName, element]);
+}
+```
+
+---
+
+## Design Principle 7: TypeScript First
+
+Design hooks with TypeScript from the start:
+
+```tsx
+// Generic hooks for flexibility
+function useLocalStorage<T>(
+  key: string,
+  initialValue: T
+): [T, (value: T | ((prev: T) => T)) => void] {
+  const [storedValue, setStoredValue] = useState<T>(() => {
+    try {
+      const item = window.localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  const setValue = useCallback(
+    (value: T | ((prev: T) => T)) => {
+      setStoredValue(prev => {
+        const valueToStore = value instanceof Function ? value(prev) : value;
+        window.localStorage.setItem(key, JSON.stringify(valueToStore));
+        return valueToStore;
+      });
+    },
+    [key]
+  );
+
+  return [storedValue, setValue];
+}
+
+// Usage: Types are inferred
+const [user, setUser] = useLocalStorage('user', { name: '', email: '' });
+// user is { name: string; email: string }
+```
+
+### Discriminated Unions for States
+
+```tsx
+type AsyncState<T> =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; data: T }
+  | { status: 'error'; error: Error };
+
+function useAsync<T>(asyncFn: () => Promise<T>) {
+  const [state, setState] = useState<AsyncState<T>>({ status: 'idle' });
+
+  const execute = useCallback(async () => {
+    setState({ status: 'loading' });
+    try {
+      const data = await asyncFn();
+      setState({ status: 'success', data });
+    } catch (error) {
+      setState({ status: 'error', error: error as Error });
+    }
+  }, [asyncFn]);
+
+  return { ...state, execute };
+}
+
+// Usage: TypeScript knows the shape based on status
+const result = useAsync(fetchUser);
+
+if (result.status === 'success') {
+  console.log(result.data); // TypeScript knows data exists
+}
+```
+
+---
+
+## Composition Over Configuration
+
+Build complex behavior by composing simple hooks:
+
+```tsx
+// Simple, focused hooks
+function useToggle(initial = false) {
+  const [value, setValue] = useState(initial);
+  const toggle = useCallback(() => setValue(v => !v), []);
+  return [value, toggle] as const;
+}
+
+function useDebounce<T>(value: T, delay: number) {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debounced;
+}
+
+function usePrevious<T>(value: T) {
+  const ref = useRef<T | undefined>(undefined);
+
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+
+  return ref.current;
+}
+
+// Compose into more specific hooks
+function useSearchInput() {
+  const [query, setQuery] = useState('');
+  const debouncedQuery = useDebounce(query, 300);
+  const previousQuery = usePrevious(debouncedQuery);
+
+  const hasChanged = debouncedQuery !== previousQuery;
+
+  return {
+    query,
+    setQuery,
+    debouncedQuery,
+    hasChanged,
+  };
+}
+```
+
+---
+
+## Common Mistakes
+
+### Mistake 1: Hooks That Call Hooks Conditionally
+
+```tsx
+// ❌ Breaks Rules of Hooks
+function useMaybeData(shouldFetch: boolean) {
+  if (shouldFetch) {
+    return useFetch('/api/data'); // Conditional hook call!
+  }
+  return null;
+}
+
+// ✅ Always call, conditionally use
+function useMaybeData(shouldFetch: boolean) {
+  const result = useFetch('/api/data');
+  return shouldFetch ? result : null;
+}
+
+// ✅ Or use enabled option
+function useMaybeData(shouldFetch: boolean) {
+  return useFetch('/api/data', { enabled: shouldFetch });
+}
+```
+
+### Mistake 2: Returning New Objects Without Need
+
+```tsx
+// ❌ New object every render (usually fine, but be aware)
+function useSize() {
+  const [width, setWidth] = useState(0);
+  const [height, setHeight] = useState(0);
+
+  return { width, height }; // New object each render
+}
+
+// If consumers use this in dependencies, memoize:
+function useSize() {
+  const [width, setWidth] = useState(0);
+  const [height, setHeight] = useState(0);
+
+  return useMemo(() => ({ width, height }), [width, height]);
+}
+```
+
+### Mistake 3: Not Handling Initial State
+
+```tsx
+// ❌ No loading state, consumers see undefined
+function useUser() {
+  const [user, setUser] = useState(); // undefined initially
+
+  useEffect(() => {
+    fetchUser().then(setUser);
+  }, []);
+
+  return user;
+}
+
+// ✅ Clear loading/error states
+function useUser() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    fetchUser()
+      .then(setUser)
+      .catch(setError)
+      .finally(() => setLoading(false));
+  }, []);
+
+  return { user, loading, error };
+}
+```
+
+---
+
+## Summary
+
+Good custom hooks follow these principles:
+
+| Principle | Description |
+|-----------|-------------|
+| Single responsibility | One hook, one job |
+| Minimal API | Return only what's needed |
+| Predictable returns | Consistent shape always |
+| Flexible configuration | Options, not hardcoding |
+| Stable references | Memoize callbacks |
+| Proper cleanup | Clean up subscriptions/timers |
+| TypeScript first | Strong types, generics |
+| Composition | Small hooks that combine |
+
+<HookCard
+  name="Custom Hook Design"
+  signature="function useX(config): ReturnType"
+  description="Custom hooks extract and share stateful logic. Design them with single responsibility, minimal API surface, stable references, and proper cleanup."
+  category="pattern"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Create a `useBoolean` hook that's more ergonomic than `useState(false)`:
+
+```tsx
+const [isOpen, { on, off, toggle }] = useBoolean(false);
+
+// on() sets to true
+// off() sets to false
+// toggle() flips the value
+```
+
+### Core
+
+Build a `useMediaQuery` hook:
+
+```tsx
+const isMobile = useMediaQuery('(max-width: 768px)');
+const prefersDark = useMediaQuery('(prefers-color-scheme: dark)');
+
+// Requirements:
+// - Subscribe to media query changes
+// - Clean up listener on unmount
+// - Handle SSR (no window)
+// - Memoize the MediaQueryList
+```
+
+### Stretch
+
+Create a `useUndoRedo` hook for any state:
+
+```tsx
+const [value, { set, undo, redo, canUndo, canRedo, history }] = useUndoRedo(initialValue);
+
+// Requirements:
+// - Track history of changes
+// - Support undo/redo with limits (e.g., max 50 states)
+// - Reset history when needed
+// - Handle complex objects (deep comparison option)
+// - TypeScript generics for any value type
+```

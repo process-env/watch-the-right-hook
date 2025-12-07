@@ -1,0 +1,235 @@
+# Appendix A: Which Hook Do I Need?
+
+Quick reference for choosing the right hook based on what you're trying to do.
+
+---
+
+## State Management
+
+| I want to... | Use this hook |
+|-------------|---------------|
+| Store a simple value (string, number, boolean) | `useState` |
+| Store an object or array | `useState` or `useReducer` |
+| Handle complex state transitions | `useReducer` |
+| Model domain events (add, remove, update) | `useReducer` |
+| Sync with external store (Redux, Zustand) | `useSyncExternalStore` |
+| Show optimistic UI during async operations | `useOptimistic` |
+| Track form submission state with Server Actions | `useActionState` |
+
+---
+
+## Data Fetching
+
+| I want to... | Use this hook |
+|-------------|---------------|
+| Fetch data when component mounts | `useEffect` + `useState` (or data library) |
+| Fetch data based on props/state | `useEffect` with dependencies |
+| Read a promise in a component | `use()` |
+| Suspend while loading | `use()` with Suspense |
+| Cache and dedupe requests | TanStack Query / SWR (libraries) |
+
+---
+
+## Side Effects
+
+| I want to... | Use this hook |
+|-------------|---------------|
+| Run code after render | `useEffect` |
+| Sync with external system (WebSocket, API) | `useEffect` |
+| Subscribe to events | `useEffect` with cleanup |
+| Run before browser paint | `useLayoutEffect` |
+| Inject CSS before paint | `useInsertionEffect` |
+| Track visibility, scroll, resize | `useEffect` with event listeners |
+
+---
+
+## Forms
+
+| I want to... | Use this hook |
+|-------------|---------------|
+| Control input values | `useState` |
+| Handle complex form state | `useReducer` |
+| Show pending state during submission | `useFormStatus` |
+| Handle Server Action responses | `useActionState` |
+| Generate accessible IDs | `useId` |
+
+---
+
+## Refs & DOM
+
+| I want to... | Use this hook |
+|-------------|---------------|
+| Access a DOM element | `useRef` |
+| Store a mutable value without re-render | `useRef` |
+| Focus an input programmatically | `useRef` |
+| Measure element dimensions | `useRef` + `useLayoutEffect` |
+| Expose methods to parent | `useImperativeHandle` + `forwardRef` |
+
+---
+
+## Performance
+
+| I want to... | Use this hook |
+|-------------|---------------|
+| Cache expensive calculation | `useMemo` |
+| Cache a function reference | `useCallback` |
+| Prevent re-renders of children | `memo()` + `useCallback`/`useMemo` |
+| Mark update as non-urgent | `useTransition` |
+| Defer a value for slow renders | `useDeferredValue` |
+| Show pending state during transition | `useTransition` (returns `isPending`) |
+
+---
+
+## Context
+
+| I want to... | Use this hook |
+|-------------|---------------|
+| Read context value | `useContext` |
+| Read context in async code | `use(Context)` |
+| Provide context to children | Just use `<Context.Provider>` |
+| Avoid prop drilling | `useContext` |
+
+---
+
+## Identity & Accessibility
+
+| I want to... | Use this hook |
+|-------------|---------------|
+| Generate unique ID for accessibility | `useId` |
+| Connect label to input | `useId` |
+| Create ARIA relationships | `useId` |
+| Handle multiple related IDs | `useId` + string concatenation |
+
+---
+
+## Decision Flowchart
+
+```
+Start: What are you trying to do?
+│
+├─► Store/change data that affects UI?
+│   ├─► Simple value? → useState
+│   ├─► Complex transitions? → useReducer
+│   ├─► External store? → useSyncExternalStore
+│   └─► Optimistic update? → useOptimistic
+│
+├─► Run code in response to something?
+│   ├─► User event (click, submit)? → Event handler (not a hook)
+│   ├─► After render/sync external system? → useEffect
+│   └─► Before paint (DOM measurements)? → useLayoutEffect
+│
+├─► Access DOM or persist value?
+│   ├─► DOM element reference? → useRef
+│   ├─► Mutable value (no re-render)? → useRef
+│   └─► Expose API to parent? → useImperativeHandle
+│
+├─► Optimize performance?
+│   ├─► Expensive calculation? → useMemo
+│   ├─► Stable function reference? → useCallback
+│   ├─► Non-urgent update? → useTransition
+│   └─► Defer expensive render? → useDeferredValue
+│
+├─► Work with forms?
+│   ├─► Track submission state? → useFormStatus
+│   ├─► Server Action result? → useActionState
+│   └─► Accessible IDs? → useId
+│
+└─► Share data without prop drilling?
+    └─► useContext (or use(Context))
+```
+
+---
+
+## Quick Reference Table
+
+| Hook | Category | When to Use |
+|------|----------|-------------|
+| `useState` | State | Simple state values |
+| `useReducer` | State | Complex state logic |
+| `useSyncExternalStore` | State | External stores |
+| `useOptimistic` | State | Optimistic UI |
+| `useActionState` | Forms | Server Action state |
+| `useFormStatus` | Forms | Submission pending state |
+| `useContext` | Context | Read context |
+| `use` | Context/Async | Read promises or context |
+| `useEffect` | Effect | Sync with external systems |
+| `useLayoutEffect` | Effect | Before paint operations |
+| `useInsertionEffect` | Effect | CSS-in-JS libraries |
+| `useRef` | Ref | DOM access, mutable values |
+| `useImperativeHandle` | Ref | Custom ref API |
+| `useMemo` | Performance | Cache calculations |
+| `useCallback` | Performance | Cache functions |
+| `useTransition` | Performance | Non-urgent updates |
+| `useDeferredValue` | Performance | Defer values |
+| `useId` | Identity | Stable unique IDs |
+
+---
+
+## The RIGHT Framework
+
+When choosing a hook, ask:
+
+- **R**ender: Does this affect what renders? → State hooks
+- **I**nteraction: Is this responding to user action? → Event handlers (not hooks)
+- **G**round truth: Is the source external? → `useSyncExternalStore`
+- **H**andoff: Do I need to pass something to the DOM? → Ref hooks
+- **T**iming: Does this need to sync after render? → Effect hooks
+
+---
+
+## Common Patterns by Use Case
+
+### Modal/Dialog
+```tsx
+const [isOpen, setIsOpen] = useState(false);
+// or
+const [isOpen, { toggle, setTrue: open, setFalse: close }] = useToggle();
+```
+
+### Form Input
+```tsx
+const [value, setValue] = useState('');
+const id = useId();
+
+<label htmlFor={id}>Name</label>
+<input id={id} value={value} onChange={e => setValue(e.target.value)} />
+```
+
+### Data Fetching
+```tsx
+const [data, setData] = useState(null);
+const [loading, setLoading] = useState(true);
+
+useEffect(() => {
+  let cancelled = false;
+  fetch(url)
+    .then(r => r.json())
+    .then(d => { if (!cancelled) setData(d); })
+    .finally(() => { if (!cancelled) setLoading(false); });
+  return () => { cancelled = true; };
+}, [url]);
+```
+
+### Debounced Search
+```tsx
+const [query, setQuery] = useState('');
+const deferredQuery = useDeferredValue(query);
+const isStale = query !== deferredQuery;
+```
+
+### Tab Switching
+```tsx
+const [tab, setTab] = useState('home');
+const [isPending, startTransition] = useTransition();
+
+const selectTab = (t: string) => startTransition(() => setTab(t));
+```
+
+### External Subscription
+```tsx
+const value = useSyncExternalStore(
+  store.subscribe,
+  store.getSnapshot,
+  store.getServerSnapshot
+);
+```

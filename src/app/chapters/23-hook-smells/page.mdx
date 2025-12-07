@@ -1,0 +1,803 @@
+# Hook Smells & Refactoring
+
+Code smells are patterns that suggest deeper problems. Hooks have their own set of smells—patterns that technically work but indicate design issues. This chapter catalogs common hook smells and shows how to refactor them.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Recognize common hook code smells
+- Understand why each smell is problematic
+- Know how to refactor smelly code
+- Build intuition for hook design
+
+---
+
+## Smell 1: The God Hook
+
+A hook that does everything:
+
+```tsx
+// ❌ God Hook: Too many responsibilities
+function useApp() {
+  const [user, setUser] = useState(null);
+  const [theme, setTheme] = useState('light');
+  const [notifications, setNotifications] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => { /* fetch user */ }, []);
+  useEffect(() => { /* fetch notifications */ }, [user]);
+  useEffect(() => { /* search */ }, [searchQuery]);
+  useEffect(() => { /* sync cart */ }, [cart]);
+
+  return {
+    user, setUser,
+    theme, setTheme,
+    notifications, setNotifications,
+    cart, setCart,
+    isMenuOpen, setIsMenuOpen,
+    searchQuery, setSearchQuery,
+    searchResults,
+    isLoading,
+    // ... many more
+  };
+}
+```
+
+### Why It's Bad
+
+- Hard to test
+- Hard to understand
+- Changes to one feature risk breaking others
+- Can't reuse parts independently
+- Causes unnecessary re-renders
+
+### Refactoring
+
+Split into focused hooks:
+
+```tsx
+// ✅ Separate concerns
+function useAuth() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    checkSession().then(setUser).finally(() => setLoading(false));
+  }, []);
+
+  return { user, loading };
+}
+
+function useTheme() {
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const toggle = useCallback(() => setTheme(t => t === 'light' ? 'dark' : 'light'), []);
+  return { theme, setTheme, toggle };
+}
+
+function useNotifications(userId: string | null) {
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  useEffect(() => {
+    if (!userId) return;
+    // Subscribe to notifications
+  }, [userId]);
+
+  return notifications;
+}
+
+function useSearch() {
+  const [query, setQuery] = useState('');
+  const debouncedQuery = useDebounce(query, 300);
+  const { data: results, isLoading } = useFetch(
+    debouncedQuery ? `/api/search?q=${debouncedQuery}` : null
+  );
+
+  return { query, setQuery, results, isLoading };
+}
+```
+
+---
+
+## Smell 2: The Prop Drilling Hook
+
+A hook that just passes through context or props:
+
+```tsx
+// ❌ Just drilling props
+function useUserData() {
+  const context = useContext(UserContext);
+  return context; // Just returning context directly
+}
+
+// Usage
+function Component() {
+  const { user, setUser } = useUserData(); // Same as useContext(UserContext)
+}
+```
+
+### Why It's Bad
+
+- Adds indirection without value
+- Makes code harder to follow
+- No actual logic encapsulation
+
+### Refactoring
+
+Either use context directly, or add real value:
+
+```tsx
+// ✅ Option 1: Use context directly
+function Component() {
+  const { user } = useContext(UserContext);
+}
+
+// ✅ Option 2: Add actual value
+function useCurrentUser() {
+  const { user, loading } = useContext(AuthContext);
+
+  // Actual logic: derived state, computed values
+  const isAdmin = user?.role === 'admin';
+  const initials = user ? `${user.firstName[0]}${user.lastName[0]}` : '';
+  const fullName = user ? `${user.firstName} ${user.lastName}` : '';
+
+  return {
+    user,
+    loading,
+    isAdmin,
+    initials,
+    fullName,
+    isAuthenticated: !!user,
+  };
+}
+```
+
+---
+
+## Smell 3: The Boolean Soup
+
+Too many boolean flags for related states:
+
+```tsx
+// ❌ Boolean soup
+function useFetch(url) {
+  const [data, setData] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isError, setIsError] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [isIdle, setIsIdle] = useState(true);
+
+  useEffect(() => {
+    setIsLoading(true);
+    setIsIdle(false);
+    setIsError(false);
+    setIsSuccess(false);
+
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
+        setData(data);
+        setIsSuccess(true);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        setIsError(true);
+        setIsLoading(false);
+      });
+  }, [url]);
+
+  return { data, isLoading, isError, isSuccess, isIdle };
+}
+```
+
+### Why It's Bad
+
+- Easy to have impossible states (loading AND error)
+- Must update multiple booleans together
+- Easy to forget one
+
+### Refactoring
+
+Use a discriminated union or state machine:
+
+```tsx
+// ✅ Discriminated union
+type FetchState<T> =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; data: T }
+  | { status: 'error'; error: Error };
+
+function useFetch<T>(url: string | null) {
+  const [state, setState] = useState<FetchState<T>>({ status: 'idle' });
+
+  useEffect(() => {
+    if (!url) {
+      setState({ status: 'idle' });
+      return;
+    }
+
+    setState({ status: 'loading' });
+
+    fetch(url)
+      .then(res => res.json())
+      .then(data => setState({ status: 'success', data }))
+      .catch(error => setState({ status: 'error', error }));
+  }, [url]);
+
+  return state;
+}
+
+// Usage: Impossible to be loading AND error
+const result = useFetch<User>('/api/user');
+
+if (result.status === 'loading') {
+  return <Spinner />;
+}
+
+if (result.status === 'error') {
+  return <Error message={result.error.message} />;
+}
+
+if (result.status === 'success') {
+  return <Profile user={result.data} />;
+}
+```
+
+---
+
+## Smell 4: The Effect Chain
+
+Effects that trigger other effects:
+
+```tsx
+// ❌ Effect chain
+function useCheckout() {
+  const [items, setItems] = useState([]);
+  const [subtotal, setSubtotal] = useState(0);
+  const [tax, setTax] = useState(0);
+  const [shipping, setShipping] = useState(0);
+  const [total, setTotal] = useState(0);
+
+  useEffect(() => {
+    setSubtotal(items.reduce((sum, item) => sum + item.price, 0));
+  }, [items]);
+
+  useEffect(() => {
+    setTax(subtotal * 0.1);
+  }, [subtotal]);
+
+  useEffect(() => {
+    setShipping(subtotal > 100 ? 0 : 10);
+  }, [subtotal]);
+
+  useEffect(() => {
+    setTotal(subtotal + tax + shipping);
+  }, [subtotal, tax, shipping]);
+
+  // Four renders for one items change!
+}
+```
+
+### Why It's Bad
+
+- Multiple unnecessary renders
+- Values temporarily out of sync
+- Hard to reason about order
+
+### Refactoring
+
+Calculate derived values directly:
+
+```tsx
+// ✅ Derive values during render
+function useCheckout() {
+  const [items, setItems] = useState<CartItem[]>([]);
+
+  // All calculated in one render pass
+  const subtotal = useMemo(
+    () => items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    [items]
+  );
+
+  const tax = subtotal * 0.1;
+  const shipping = subtotal > 100 ? 0 : 10;
+  const total = subtotal + tax + shipping;
+
+  return { items, setItems, subtotal, tax, shipping, total };
+}
+```
+
+---
+
+## Smell 5: The Stale Closure
+
+Referencing outdated values in callbacks:
+
+```tsx
+// ❌ Stale closure
+function useInterval(callback, delay) {
+  useEffect(() => {
+    const id = setInterval(callback, delay); // callback is stale!
+    return () => clearInterval(id);
+  }, [delay]); // callback not in deps
+}
+
+// Usage
+function Counter() {
+  const [count, setCount] = useState(0);
+
+  useInterval(() => {
+    console.log(count); // Always logs 0!
+    setCount(count + 1); // Always sets to 1!
+  }, 1000);
+}
+```
+
+### Why It's Bad
+
+- Callbacks see old values
+- Causes subtle bugs
+- Hard to debug
+
+### Refactoring
+
+Use a ref for the callback:
+
+```tsx
+// ✅ Fresh callback via ref
+function useInterval(callback: () => void, delay: number | null) {
+  const savedCallback = useRef(callback);
+
+  // Update ref on every render
+  useEffect(() => {
+    savedCallback.current = callback;
+  }, [callback]);
+
+  useEffect(() => {
+    if (delay === null) return;
+
+    const id = setInterval(() => savedCallback.current(), delay);
+    return () => clearInterval(id);
+  }, [delay]);
+}
+
+// Usage: Now works correctly
+function Counter() {
+  const [count, setCount] = useState(0);
+
+  useInterval(() => {
+    console.log(count); // Fresh value each time
+    setCount(count + 1); // Increments correctly
+  }, 1000);
+}
+```
+
+---
+
+## Smell 6: The Dependency Lie
+
+Omitting dependencies or using eslint-disable:
+
+```tsx
+// ❌ Lying about dependencies
+function useSearch(query) {
+  const [results, setResults] = useState([]);
+
+  useEffect(() => {
+    fetchResults(query, currentUser.id).then(setResults);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]); // Missing currentUser.id!
+}
+```
+
+### Why It's Bad
+
+- Effect doesn't re-run when it should
+- Stale data bugs
+- The eslint rule exists for a reason
+
+### Refactoring
+
+Include all dependencies, or restructure:
+
+```tsx
+// ✅ Option 1: Include dependency
+function useSearch(query: string, userId: string) {
+  const [results, setResults] = useState<Result[]>([]);
+
+  useEffect(() => {
+    fetchResults(query, userId).then(setResults);
+  }, [query, userId]); // All deps included
+
+  return results;
+}
+
+// ✅ Option 2: Use ref for value you don't want to trigger re-run
+function useSearch(query: string) {
+  const [results, setResults] = useState<Result[]>([]);
+  const userIdRef = useRef(currentUser.id);
+
+  useEffect(() => {
+    userIdRef.current = currentUser.id;
+  });
+
+  useEffect(() => {
+    // Only re-runs on query change, but uses current userId
+    fetchResults(query, userIdRef.current).then(setResults);
+  }, [query]);
+
+  return results;
+}
+```
+
+---
+
+## Smell 7: The Initialize-in-Effect
+
+Using effects to set initial state:
+
+```tsx
+// ❌ Initialize in effect
+function useForm(initialData) {
+  const [values, setValues] = useState({});
+
+  useEffect(() => {
+    setValues(initialData);
+  }, []); // Only runs once, but causes extra render
+}
+```
+
+### Why It's Bad
+
+- Extra render on mount
+- Flash of empty state
+- That's what useState's argument is for
+
+### Refactoring
+
+Initialize directly:
+
+```tsx
+// ✅ Initialize in useState
+function useForm<T>(initialData: T) {
+  const [values, setValues] = useState(initialData);
+  return { values, setValues };
+}
+
+// ✅ For expensive initialization, use lazy initial state
+function useForm<T>(computeInitial: () => T) {
+  const [values, setValues] = useState(computeInitial); // Function is called once
+  return { values, setValues };
+}
+```
+
+---
+
+## Smell 8: The Sync State
+
+Using effects to sync state between components:
+
+```tsx
+// ❌ Syncing via effect
+function Parent() {
+  const [parentValue, setParentValue] = useState('');
+
+  return (
+    <Child parentValue={parentValue} onValueChange={setParentValue} />
+  );
+}
+
+function Child({ parentValue, onValueChange }) {
+  const [localValue, setLocalValue] = useState(parentValue);
+
+  // Sync local to parent
+  useEffect(() => {
+    onValueChange(localValue);
+  }, [localValue, onValueChange]);
+
+  // Sync parent to local
+  useEffect(() => {
+    setLocalValue(parentValue);
+  }, [parentValue]);
+
+  return <input value={localValue} onChange={e => setLocalValue(e.target.value)} />;
+}
+```
+
+### Why It's Bad
+
+- Two sources of truth
+- Sync loops
+- Unnecessary renders
+
+### Refactoring
+
+Lift state up or use controlled components:
+
+```tsx
+// ✅ Controlled component - single source of truth
+function Parent() {
+  const [value, setValue] = useState('');
+
+  return <Child value={value} onChange={setValue} />;
+}
+
+function Child({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return <input value={value} onChange={e => onChange(e.target.value)} />;
+}
+
+// ✅ Or uncontrolled with key reset
+function Parent() {
+  const [formKey, setFormKey] = useState(0);
+  const [savedData, setSavedData] = useState(null);
+
+  const handleSubmit = (data) => {
+    setSavedData(data);
+    setFormKey(k => k + 1); // Reset form
+  };
+
+  return <Form key={formKey} initialData={savedData} onSubmit={handleSubmit} />;
+}
+```
+
+---
+
+## Smell 9: The Premature Abstraction
+
+Creating hooks for everything:
+
+```tsx
+// ❌ Over-abstraction
+function useIsVisible() {
+  const [isVisible, setIsVisible] = useState(false);
+  return [isVisible, setIsVisible];
+}
+
+function useCounter() {
+  const [count, setCount] = useState(0);
+  return [count, setCount];
+}
+
+function useInputValue() {
+  const [value, setValue] = useState('');
+  return [value, setValue];
+}
+```
+
+### Why It's Bad
+
+- These are just `useState` with extra steps
+- Adds indirection without value
+- Makes code harder to understand
+
+### Refactoring
+
+Only abstract when there's real logic to share:
+
+```tsx
+// ✅ Just use useState directly for simple cases
+function Component() {
+  const [isVisible, setIsVisible] = useState(false);
+  const [count, setCount] = useState(0);
+  const [value, setValue] = useState('');
+}
+
+// ✅ Abstract when there's actual reusable logic
+function useToggle(initial = false) {
+  const [value, setValue] = useState(initial);
+
+  // Actual logic beyond useState
+  const toggle = useCallback(() => setValue(v => !v), []);
+  const setTrue = useCallback(() => setValue(true), []);
+  const setFalse = useCallback(() => setValue(false), []);
+
+  return [value, { toggle, setTrue, setFalse }] as const;
+}
+```
+
+---
+
+## Smell 10: The Everything Ref
+
+Using refs to avoid re-renders when state would be appropriate:
+
+```tsx
+// ❌ Ref instead of state
+function Form() {
+  const nameRef = useRef('');
+  const emailRef = useRef('');
+  const [, forceUpdate] = useState({});
+
+  const handleSubmit = () => {
+    console.log(nameRef.current, emailRef.current);
+  };
+
+  return (
+    <form>
+      <input
+        onChange={e => {
+          nameRef.current = e.target.value;
+          forceUpdate({}); // Manual re-render!
+        }}
+      />
+      <input
+        onChange={e => {
+          emailRef.current = e.target.value;
+          forceUpdate({});
+        }}
+      />
+      <button onClick={handleSubmit}>Submit</button>
+    </form>
+  );
+}
+```
+
+### Why It's Bad
+
+- Fighting React's model
+- Manual force updates
+- No automatic UI sync
+
+### Refactoring
+
+Use state for values that affect UI:
+
+```tsx
+// ✅ State for UI-affecting values
+function Form() {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+
+  const handleSubmit = () => {
+    console.log(name, email);
+  };
+
+  return (
+    <form>
+      <input value={name} onChange={e => setName(e.target.value)} />
+      <input value={email} onChange={e => setEmail(e.target.value)} />
+      <button onClick={handleSubmit}>Submit</button>
+    </form>
+  );
+}
+
+// ✅ Refs are for values that DON'T affect render
+function Timer() {
+  const intervalRef = useRef<number | null>(null); // Doesn't affect UI
+  const [time, setTime] = useState(0); // Affects UI
+
+  // ...
+}
+```
+
+---
+
+## Refactoring Checklist
+
+When reviewing hook code, ask:
+
+| Question | If Yes... |
+|----------|-----------|
+| Does this hook do more than one thing? | Split it |
+| Are there multiple boolean flags for one concept? | Use discriminated union |
+| Do effects trigger other effects? | Derive values instead |
+| Am I disabling the exhaustive-deps rule? | Fix the dependencies |
+| Am I initializing state in an effect? | Use useState initial value |
+| Am I syncing state between components? | Lift state or use controlled components |
+| Is this just useState with no extra logic? | Use useState directly |
+| Am I using refs for UI-affecting values? | Use state instead |
+
+---
+
+## Summary
+
+Hook smells indicate deeper design issues:
+
+| Smell | Problem | Solution |
+|-------|---------|----------|
+| God Hook | Too many responsibilities | Split into focused hooks |
+| Prop Drilling Hook | No added value | Use context directly or add logic |
+| Boolean Soup | Impossible states | Discriminated unions |
+| Effect Chain | Multiple renders | Derive during render |
+| Stale Closure | Outdated values | Refs for callbacks |
+| Dependency Lie | Stale data | Include all deps |
+| Initialize in Effect | Extra render | useState initial value |
+| Sync State | Two sources of truth | Lift state up |
+| Premature Abstraction | Unnecessary indirection | Just use useState |
+| Everything Ref | Fighting React | State for UI values |
+
+<HookCard
+  name="Hook Smells"
+  signature="Look for: God hooks, boolean soup, effect chains, stale closures"
+  description="Hook smells indicate design problems. Recognize them early and refactor toward focused hooks, derived state, and proper dependency management."
+  category="pattern"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Identify the smells in this hook and refactor:
+
+```tsx
+function useUserProfile(userId) {
+  const [user, setUser] = useState(null);
+  const [posts, setPosts] = useState([]);
+  const [followers, setFollowers] = useState([]);
+  const [isLoadingUser, setIsLoadingUser] = useState(false);
+  const [isLoadingPosts, setIsLoadingPosts] = useState(false);
+  const [isLoadingFollowers, setIsLoadingFollowers] = useState(false);
+  const [userError, setUserError] = useState(null);
+  const [postsError, setPostsError] = useState(null);
+  const [followersError, setFollowersError] = useState(null);
+
+  useEffect(() => {
+    setIsLoadingUser(true);
+    fetchUser(userId)
+      .then(setUser)
+      .catch(setUserError)
+      .finally(() => setIsLoadingUser(false));
+  }, [userId]);
+
+  useEffect(() => {
+    if (!user) return;
+    setIsLoadingPosts(true);
+    fetchPosts(user.id)
+      .then(setPosts)
+      .catch(setPostsError)
+      .finally(() => setIsLoadingPosts(false));
+  }, [user]);
+
+  // ... more of the same
+
+  return { user, posts, followers, isLoadingUser, /* ... 12 more values */ };
+}
+```
+
+### Core
+
+Refactor this form hook that has multiple smells:
+
+```tsx
+function useForm(schema) {
+  const [values, setValues] = useState({});
+  const [errors, setErrors] = useState({});
+  const [touched, setTouched] = useState({});
+  const [isValid, setIsValid] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+
+  useEffect(() => {
+    const validationErrors = schema.validate(values);
+    setErrors(validationErrors);
+  }, [values, schema]);
+
+  useEffect(() => {
+    setIsValid(Object.keys(errors).length === 0);
+  }, [errors]);
+
+  useEffect(() => {
+    setIsDirty(JSON.stringify(values) !== JSON.stringify({}));
+  }, [values]);
+
+  // ... continues with more effect chains
+}
+```
+
+### Stretch
+
+Review a real codebase (yours or open source) and:
+
+1. Identify 5 different hook smells
+2. Document why each is problematic
+3. Propose refactored solutions
+4. Estimate the impact of each refactoring (lines changed, tests affected)
+5. Prioritize which to fix first based on severity and effort

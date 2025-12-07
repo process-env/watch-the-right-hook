@@ -1,0 +1,410 @@
+# useTransition & useDeferredValue: Concurrent UI Patterns
+
+Some updates are urgent (typing, clicking). Others can wait (search results, filtering large lists). React's concurrent features let you mark updates as non-urgent, keeping the UI responsive while heavy work happens in the background.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Understand the difference between urgent and non-urgent updates
+- Use useTransition to mark slow updates as transitions
+- Use useDeferredValue to defer expensive renders
+- Keep UIs responsive during heavy computation
+- Know when to use each approach
+
+---
+
+## The Problem: Blocking Updates
+
+When you update state, React renders immediately. If rendering is slow, the UI freezes:
+
+```tsx
+function SearchResults({ query }: { query: string }) {
+  // Filtering 100,000 items blocks the main thread
+  const results = items.filter(item =>
+    item.name.toLowerCase().includes(query.toLowerCase())
+  );
+
+  return <List items={results} />;
+}
+
+function SearchPage() {
+  const [query, setQuery] = useState('');
+
+  return (
+    <div>
+      {/* Input feels laggy because every keystroke triggers slow render */}
+      <input value={query} onChange={e => setQuery(e.target.value)} />
+      <SearchResults query={query} />
+    </div>
+  );
+}
+```
+
+Every keystroke triggers a full re-render of 100,000 items. The input lags.
+
+---
+
+## useTransition: Non-Urgent Updates
+
+`useTransition` marks a state update as non-urgent:
+
+```tsx
+const [isPending, startTransition] = useTransition();
+```
+
+- `isPending`: Boolean indicating if a transition is in progress
+- `startTransition`: Function to wrap non-urgent updates
+
+```tsx
+function SearchPage() {
+  const [query, setQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isPending, startTransition] = useTransition();
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Urgent: Update input immediately
+    setQuery(e.target.value);
+
+    // Non-urgent: Update search results in background
+    startTransition(() => {
+      setSearchQuery(e.target.value);
+    });
+  };
+
+  return (
+    <div>
+      <input value={query} onChange={handleChange} />
+      {isPending && <Spinner />}
+      <SearchResults query={searchQuery} />
+    </div>
+  );
+}
+```
+
+Now:
+1. Input updates immediately (urgent)
+2. Search results update in background (transition)
+3. If user types again, React abandons the in-progress transition
+4. UI stays responsive
+
+<Callout type="info" title="Interruptible Rendering">
+Transition updates are interruptible. If a new urgent update comes in (like another keystroke), React can pause the transition, handle the urgent update, then resume.
+</Callout>
+
+---
+
+## useDeferredValue: Deferring Expensive Props
+
+`useDeferredValue` defers updating a value until urgent work is done:
+
+```tsx
+const deferredValue = useDeferredValue(value);
+```
+
+```tsx
+function SearchPage() {
+  const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
+
+  // query updates immediately (for input)
+  // deferredQuery updates after urgent work completes
+
+  return (
+    <div>
+      <input value={query} onChange={e => setQuery(e.target.value)} />
+      <SearchResults query={deferredQuery} />
+    </div>
+  );
+}
+```
+
+This is simpler than `useTransition` when you don't control the state update.
+
+---
+
+## useTransition vs useDeferredValue
+
+| useTransition | useDeferredValue |
+|---------------|------------------|
+| Wraps state update | Wraps value |
+| You control the setState call | Value comes from props/parent |
+| Gives you `isPending` | Compare deferred vs current to detect pending |
+| More explicit | More automatic |
+
+### When to Use Each
+
+**useTransition**: When you own the state and want to mark specific updates as transitions.
+
+```tsx
+// You control the update
+startTransition(() => {
+  setFilter(newFilter);
+});
+```
+
+**useDeferredValue**: When you receive a value and want to defer expensive rendering.
+
+```tsx
+// Value comes from props or parent state
+const deferredQuery = useDeferredValue(props.query);
+```
+
+---
+
+## Visual Feedback During Transitions
+
+### Using isPending
+
+```tsx
+function SearchPage() {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [isPending, startTransition] = useTransition();
+
+  const handleSearch = (value: string) => {
+    setQuery(value);
+    startTransition(() => {
+      setResults(searchDatabase(value));
+    });
+  };
+
+  return (
+    <div>
+      <input value={query} onChange={e => handleSearch(e.target.value)} />
+
+      <div style={{ opacity: isPending ? 0.7 : 1 }}>
+        {isPending && <div className="loading-bar" />}
+        <ResultsList results={results} />
+      </div>
+    </div>
+  );
+}
+```
+
+### Detecting Stale with useDeferredValue
+
+```tsx
+function SearchPage() {
+  const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
+  const isStale = query !== deferredQuery;
+
+  return (
+    <div>
+      <input value={query} onChange={e => setQuery(e.target.value)} />
+
+      <div style={{ opacity: isStale ? 0.7 : 1 }}>
+        <SearchResults query={deferredQuery} />
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## Practical Examples
+
+### Tab Switching
+
+```tsx
+function Tabs() {
+  const [tab, setTab] = useState('home');
+  const [isPending, startTransition] = useTransition();
+
+  const selectTab = (nextTab: string) => {
+    startTransition(() => {
+      setTab(nextTab);
+    });
+  };
+
+  return (
+    <div>
+      <nav>
+        <button onClick={() => selectTab('home')}>Home</button>
+        <button onClick={() => selectTab('posts')}>Posts (slow)</button>
+        <button onClick={() => selectTab('about')}>About</button>
+      </nav>
+
+      <div style={{ opacity: isPending ? 0.6 : 1 }}>
+        {tab === 'home' && <Home />}
+        {tab === 'posts' && <Posts />}  {/* Slow component */}
+        {tab === 'about' && <About />}
+      </div>
+    </div>
+  );
+}
+```
+
+Without transitions: Clicking "Posts" freezes the UI until Posts renders.
+With transitions: UI stays responsive, shows loading state.
+
+### Large List Filtering
+
+```tsx
+function FilteredList({ items }: { items: Item[] }) {
+  const [filter, setFilter] = useState('');
+  const deferredFilter = useDeferredValue(filter);
+  const isStale = filter !== deferredFilter;
+
+  const filteredItems = useMemo(
+    () => items.filter(item => item.name.includes(deferredFilter)),
+    [items, deferredFilter]
+  );
+
+  return (
+    <div>
+      <input
+        value={filter}
+        onChange={e => setFilter(e.target.value)}
+        placeholder="Filter items..."
+      />
+
+      <div style={{ opacity: isStale ? 0.5 : 1 }}>
+        {filteredItems.map(item => (
+          <ItemRow key={item.id} item={item} />
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+### Suspense Integration
+
+Transitions work with Suspense:
+
+```tsx
+function App() {
+  const [resource, setResource] = useState(initialResource);
+  const [isPending, startTransition] = useTransition();
+
+  const handleClick = () => {
+    startTransition(() => {
+      setResource(fetchNextPage());
+    });
+  };
+
+  return (
+    <div>
+      <button onClick={handleClick} disabled={isPending}>
+        {isPending ? 'Loading...' : 'Next Page'}
+      </button>
+
+      <Suspense fallback={<Skeleton />}>
+        <Content resource={resource} />
+      </Suspense>
+    </div>
+  );
+}
+```
+
+During a transition, the old content stays visible instead of showing the fallback.
+
+---
+
+## When Not to Use Transitions
+
+### Don't Use for Urgent Updates
+
+```tsx
+// ❌ Wrong: Input should feel instant
+const handleChange = (e) => {
+  startTransition(() => {
+    setInputValue(e.target.value); // This will feel laggy!
+  });
+};
+
+// ✅ Right: Input is urgent, derived state is transition
+const handleChange = (e) => {
+  setInputValue(e.target.value); // Urgent
+  startTransition(() => {
+    setSearchResults(search(e.target.value)); // Non-urgent
+  });
+};
+```
+
+### Don't Use for Network Requests
+
+Transitions are for CPU-bound work, not I/O:
+
+```tsx
+// ❌ Wrong: Network request isn't helped by transitions
+startTransition(() => {
+  fetch('/api/data').then(setData); // Network latency isn't reduced
+});
+
+// ✅ Right: Use for rendering the fetched data
+const handleFetch = async () => {
+  const data = await fetch('/api/data');
+  startTransition(() => {
+    setData(data); // Rendering might be slow
+  });
+};
+```
+
+---
+
+## Summary
+
+Concurrent features keep UIs responsive during heavy work:
+
+- **useTransition**: Mark state updates as non-urgent
+- **useDeferredValue**: Defer prop values for expensive children
+- **isPending / isStale**: Show loading indicators
+- **Interruptible**: Urgent updates can interrupt transitions
+
+Use them for:
+- Large list filtering/sorting
+- Tab switching with heavy content
+- Search-as-you-type interfaces
+- Any expensive render triggered by user input
+
+<HookCard
+  name="useTransition & useDeferredValue"
+  signature="const [isPending, startTransition] = useTransition() / useDeferredValue(value)"
+  description="Mark updates as non-urgent to keep the UI responsive. Urgent updates (typing) happen immediately; transitions render in the background."
+  category="performance"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Add transitions to make this slow tab interface responsive:
+
+```tsx
+function SlowTabs() {
+  const [tab, setTab] = useState('fast');
+
+  return (
+    <div>
+      <button onClick={() => setTab('fast')}>Fast Tab</button>
+      <button onClick={() => setTab('slow')}>Slow Tab</button>
+
+      {tab === 'fast' && <FastContent />}
+      {tab === 'slow' && <SlowContent />} {/* Renders 10,000 items */}
+    </div>
+  );
+}
+```
+
+### Core
+
+Build a search interface with:
+- Instant input feedback
+- Deferred search results
+- Visual indication of stale results
+- Cancel in-flight transitions when typing
+
+### Stretch
+
+Create a "compare" view that:
+- Shows two versions of large data side-by-side
+- Lets users toggle between comparison modes
+- Uses transitions for mode switches
+- Shows independent loading states for each panel
+- Handles rapid toggling gracefully

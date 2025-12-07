@@ -1,0 +1,433 @@
+# useFormStatus: Native Form Superpowers
+
+HTML forms have always worked. You could submit a form without JavaScript in 1995. React 19 embraces this heritage while adding modern capabilities. `useFormStatus` bridges the gap, letting any component in your form tree know what's happening.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Use useFormStatus to build reusable form components
+- Understand the form action model in React 19
+- Build accessible loading states without prop drilling
+- Know when to use native forms vs controlled inputs
+- Handle progressive enhancement
+
+---
+
+## The Form Action Model
+
+React 19 lets you pass a function directly to `<form action>`:
+
+```tsx
+async function submitForm(formData: FormData) {
+  const name = formData.get('name');
+  await api.submit(name);
+}
+
+function MyForm() {
+  return (
+    <form action={submitForm}>
+      <input name="name" />
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+This works like traditional HTML forms but with React handling the submission. The function receives `FormData`, not a synthetic event.
+
+<Callout type="info" title="Progressive Enhancement">
+With Server Actions, forms work even before JavaScript loads. Users can submit immediately—React enhances the experience when it hydrates.
+</Callout>
+
+---
+
+## useFormStatus Basics
+
+`useFormStatus` must be called from a component *inside* a `<form>`. It returns info about that form's submission state.
+
+```tsx
+import { useFormStatus } from 'react-dom';
+
+function SubmitButton() {
+  const { pending, data, method, action } = useFormStatus();
+
+  return (
+    <button type="submit" disabled={pending}>
+      {pending ? 'Submitting...' : 'Submit'}
+    </button>
+  );
+}
+
+function ContactForm() {
+  return (
+    <form action={handleSubmit}>
+      <input name="email" type="email" required />
+      <textarea name="message" required />
+      <SubmitButton />
+    </form>
+  );
+}
+```
+
+The return value includes:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `pending` | `boolean` | True while form is submitting |
+| `data` | `FormData \| null` | The data being submitted |
+| `method` | `string` | HTTP method (get/post) |
+| `action` | `function` | The action being called |
+
+---
+
+## Building Reusable Form Components
+
+The power of `useFormStatus` is building components that work in any form:
+
+### Universal Submit Button
+
+```tsx
+function SubmitButton({
+  children,
+  pendingText = 'Submitting...',
+  ...props
+}: {
+  children: React.ReactNode;
+  pendingText?: string;
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { pending } = useFormStatus();
+
+  return (
+    <button type="submit" disabled={pending} {...props}>
+      {pending ? pendingText : children}
+    </button>
+  );
+}
+
+// Usage - works in any form
+<form action={loginAction}>
+  <SubmitButton pendingText="Logging in...">Log In</SubmitButton>
+</form>
+
+<form action={signupAction}>
+  <SubmitButton pendingText="Creating account...">Sign Up</SubmitButton>
+</form>
+```
+
+### Input That Disables During Submit
+
+```tsx
+function FormInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  const { pending } = useFormStatus();
+
+  return (
+    <input
+      {...props}
+      disabled={pending || props.disabled}
+      aria-busy={pending}
+    />
+  );
+}
+
+// All inputs automatically disable during submission
+<form action={submitAction}>
+  <FormInput name="email" type="email" />
+  <FormInput name="name" />
+  <SubmitButton>Submit</SubmitButton>
+</form>
+```
+
+### Loading Overlay
+
+```tsx
+function FormLoadingOverlay({ children }: { children: React.ReactNode }) {
+  const { pending } = useFormStatus();
+
+  return (
+    <div className="relative">
+      {children}
+      {pending && (
+        <div className="absolute inset-0 bg-white/50 flex items-center justify-center">
+          <Spinner />
+        </div>
+      )}
+    </div>
+  );
+}
+
+<form action={submitAction}>
+  <FormLoadingOverlay>
+    <input name="title" />
+    <textarea name="body" />
+    <SubmitButton>Post</SubmitButton>
+  </FormLoadingOverlay>
+</form>
+```
+
+---
+
+## Accessing Submitted Data
+
+`useFormStatus` gives you the `FormData` being submitted, useful for showing what's being sent:
+
+```tsx
+function SubmittingPreview() {
+  const { pending, data } = useFormStatus();
+
+  if (!pending || !data) return null;
+
+  return (
+    <div className="preview">
+      Sending message to: {data.get('email')}
+    </div>
+  );
+}
+
+<form action={sendEmail}>
+  <input name="email" type="email" />
+  <textarea name="message" />
+  <SubmittingPreview />
+  <SubmitButton>Send</SubmitButton>
+</form>
+```
+
+---
+
+## Combining with useActionState
+
+`useFormStatus` and `useActionState` complement each other:
+
+- `useActionState`: Manages the action result (success, errors, data)
+- `useFormStatus`: Provides pending state to child components
+
+```tsx
+async function createPost(prevState: State, formData: FormData) {
+  const title = formData.get('title') as string;
+
+  if (title.length < 3) {
+    return { error: 'Title too short' };
+  }
+
+  const post = await api.createPost(title);
+  return { success: true, post };
+}
+
+function CreatePostForm() {
+  const [state, formAction] = useActionState(createPost, {});
+
+  return (
+    <form action={formAction}>
+      <FormInput name="title" placeholder="Post title" />
+      {state.error && <p className="error">{state.error}</p>}
+      {state.success && <p className="success">Post created!</p>}
+      <SubmitButton>Create Post</SubmitButton>
+    </form>
+  );
+}
+
+// SubmitButton and FormInput use useFormStatus internally
+// They don't need props for pending state
+```
+
+---
+
+## The Boundary Rule
+
+`useFormStatus` only works for the form it's inside. It won't cross form boundaries:
+
+```tsx
+function OuterForm() {
+  return (
+    <form action={outerAction}>
+      <SubmitButton /> {/* Tracks outerAction */}
+
+      <form action={innerAction}>
+        <SubmitButton /> {/* Tracks innerAction, NOT outerAction */}
+      </form>
+    </form>
+  );
+}
+```
+
+And it won't work outside a form:
+
+```tsx
+function Page() {
+  const { pending } = useFormStatus(); // ❌ Always returns { pending: false }
+
+  return (
+    <form action={someAction}>
+      <button>Submit</button>
+    </form>
+  );
+}
+```
+
+<Callout type="warning" title="Must Be Inside Form">
+`useFormStatus` returns `{ pending: false, data: null, method: null, action: null }` when called outside a `<form>`. No error is thrown—it just doesn't work.
+</Callout>
+
+---
+
+## Accessibility Considerations
+
+Good form UX requires proper accessibility:
+
+```tsx
+function AccessibleSubmitButton({ children }: { children: React.ReactNode }) {
+  const { pending } = useFormStatus();
+
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      aria-disabled={pending}
+      aria-busy={pending}
+    >
+      {pending ? (
+        <>
+          <span className="sr-only">Submitting form</span>
+          <Spinner aria-hidden="true" />
+          <span aria-hidden="true">Submitting...</span>
+        </>
+      ) : (
+        children
+      )}
+    </button>
+  );
+}
+```
+
+Key accessibility patterns:
+
+1. **`aria-busy`**: Indicates the form is processing
+2. **`aria-disabled`**: Communicates disabled state to screen readers
+3. **`sr-only` text**: Announces state changes to screen readers
+4. **`aria-hidden`**: Hides decorative elements from assistive tech
+
+---
+
+## Form vs Controlled Inputs
+
+When should you use form actions vs controlled inputs?
+
+### Use Form Actions When:
+
+- Simple forms with straightforward submission
+- You want progressive enhancement
+- Server Actions handle validation
+- You don't need real-time validation
+
+```tsx
+// Form action approach
+<form action={submitAction}>
+  <input name="email" type="email" required />
+  <SubmitButton>Subscribe</SubmitButton>
+</form>
+```
+
+### Use Controlled Inputs When:
+
+- Complex validation as user types
+- Dependent fields (country → state dropdown)
+- Real-time formatting (phone numbers, credit cards)
+- You need the value before submission
+
+```tsx
+// Controlled approach
+function PhoneInput() {
+  const [phone, setPhone] = useState('');
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatPhoneNumber(e.target.value);
+    setPhone(formatted);
+  };
+
+  return <input value={phone} onChange={handleChange} />;
+}
+```
+
+### Hybrid Approach
+
+You can mix both:
+
+```tsx
+function HybridForm() {
+  const [email, setEmail] = useState('');
+  const isValidEmail = email.includes('@');
+
+  return (
+    <form action={submitAction}>
+      {/* Controlled for real-time validation */}
+      <input
+        name="email"
+        value={email}
+        onChange={e => setEmail(e.target.value)}
+      />
+      {email && !isValidEmail && <span>Invalid email</span>}
+
+      {/* Uncontrolled, just needs the value */}
+      <input name="name" />
+
+      <SubmitButton disabled={!isValidEmail}>Submit</SubmitButton>
+    </form>
+  );
+}
+```
+
+---
+
+## Summary
+
+`useFormStatus` enables component-level form awareness without prop drilling:
+
+- Build reusable form components that know their submission state
+- Works with React 19's form action model
+- Combine with `useActionState` for full form lifecycle
+- Only works inside a `<form>` element
+- Embraces progressive enhancement
+
+<HookCard
+  name="useFormStatus"
+  signature="const { pending, data, method, action } = useFormStatus()"
+  description="Returns the status of the parent form's submission. Build reusable form components that respond to submission state without prop drilling."
+  category="form"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Create a `FormFieldset` component that disables all its children during form submission:
+
+```tsx
+<form action={action}>
+  <FormFieldset>
+    <input name="a" />
+    <input name="b" />
+  </FormFieldset>
+  <SubmitButton>Submit</SubmitButton>
+</form>
+```
+
+### Core
+
+Build a multi-step form wizard where:
+- Each step is its own `<form>`
+- Navigation buttons disable during submission
+- A progress indicator shows which step is submitting
+- Steps can be skipped (if optional)
+
+### Stretch
+
+Create a form component library with:
+- `<Form>` - wrapper with built-in error boundary
+- `<FormField>` - label + input + error message
+- `<FormSubmit>` - submit button with loading state
+- `<FormReset>` - reset button that disables during submission
+- `<FormProgress>` - shows submission progress for file uploads
+
+All components should work together automatically using `useFormStatus`.

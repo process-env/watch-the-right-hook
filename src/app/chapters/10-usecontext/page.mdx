@@ -1,0 +1,456 @@
+# useContext: Shared State Without Prop Drilling
+
+When data needs to flow through many component layers, props become tedious. Context lets you broadcast data to any component that needs it, no matter how deep. But context has tradeoffs—use it wrong and you'll create performance problems and tangled dependencies.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Create and consume context correctly
+- Know when context is the right solution (and when it isn't)
+- Avoid common performance pitfalls
+- Split context for better performance
+- Combine context with useReducer for state management
+
+---
+
+## The Problem: Prop Drilling
+
+Without context, passing data through many levels means threading props through every component:
+
+```tsx
+// Every component in the chain needs to pass `user` down
+function App() {
+  const [user, setUser] = useState<User | null>(null);
+  return <Layout user={user} />;
+}
+
+function Layout({ user }: { user: User | null }) {
+  return <Sidebar user={user} />;
+}
+
+function Sidebar({ user }: { user: User | null }) {
+  return <UserMenu user={user} />;
+}
+
+function UserMenu({ user }: { user: User | null }) {
+  return <div>{user?.name}</div>;
+}
+```
+
+This is prop drilling. It works but creates problems:
+- Middle components carry props they don't use
+- Refactoring is painful
+- Adding new data means touching many files
+
+---
+
+## Context Basics
+
+Context has three parts:
+
+1. **Create** the context
+2. **Provide** a value at some level
+3. **Consume** the value anywhere below
+
+```tsx
+import { createContext, useContext, useState } from 'react';
+
+// 1. Create
+const UserContext = createContext<User | null>(null);
+
+// 2. Provide
+function App() {
+  const [user, setUser] = useState<User | null>(null);
+
+  return (
+    <UserContext.Provider value={user}>
+      <Layout />
+    </UserContext.Provider>
+  );
+}
+
+// 3. Consume (anywhere in the tree)
+function UserMenu() {
+  const user = useContext(UserContext);
+  return <div>{user?.name}</div>;
+}
+
+// Middle components don't need to know about user
+function Layout() {
+  return <Sidebar />;
+}
+
+function Sidebar() {
+  return <UserMenu />;
+}
+```
+
+<Callout type="tip" title="Default Values">
+The argument to `createContext` is the default value used when there's no Provider above. For required contexts, use `null` and throw in a custom hook if missing.
+</Callout>
+
+---
+
+## Custom Hooks for Context
+
+Always wrap `useContext` in a custom hook:
+
+```tsx
+const ThemeContext = createContext<Theme | null>(null);
+
+// ❌ Direct useContext - no safety
+function Component() {
+  const theme = useContext(ThemeContext); // Could be null
+}
+
+// ✅ Custom hook with safety
+function useTheme() {
+  const context = useContext(ThemeContext);
+  if (context === null) {
+    throw new Error('useTheme must be used within ThemeProvider');
+  }
+  return context;
+}
+
+function Component() {
+  const theme = useTheme(); // Type-safe, never null
+}
+```
+
+This pattern:
+- Provides clear error messages
+- Ensures type safety (no null checks everywhere)
+- Encapsulates the context implementation
+
+---
+
+## Provider Pattern
+
+Bundle your context creation, provider, and hook together:
+
+```tsx
+// theme-context.tsx
+import { createContext, useContext, useState, ReactNode } from 'react';
+
+type Theme = 'light' | 'dark';
+
+type ThemeContextValue = {
+  theme: Theme;
+  toggleTheme: () => void;
+};
+
+const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState<Theme>('light');
+
+  const toggleTheme = () => {
+    setTheme(t => (t === 'light' ? 'dark' : 'light'));
+  };
+
+  return (
+    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
+}
+
+export function useTheme() {
+  const context = useContext(ThemeContext);
+  if (!context) {
+    throw new Error('useTheme must be used within ThemeProvider');
+  }
+  return context;
+}
+```
+
+```tsx
+// app.tsx
+import { ThemeProvider } from './theme-context';
+
+function App() {
+  return (
+    <ThemeProvider>
+      <Main />
+    </ThemeProvider>
+  );
+}
+
+// any-component.tsx
+import { useTheme } from './theme-context';
+
+function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme();
+  return <button onClick={toggleTheme}>Theme: {theme}</button>;
+}
+```
+
+---
+
+## When to Use Context
+
+### Good Use Cases
+
+- **Theme** (colors, dark mode)
+- **Locale/i18n** (language, formatting)
+- **Authentication** (current user)
+- **Feature flags**
+- **Form state** (within a form component tree)
+
+### Bad Use Cases
+
+- **Frequently changing data** (causes too many re-renders)
+- **Data only a few components need** (prop drilling is fine)
+- **Complex state management** (use a library instead)
+- **Server data** (use React Query, SWR, or Server Components)
+
+<Callout type="warning" title="Context Is Not Free">
+Every context consumer re-renders when the context value changes. For frequently updating data, this can devastate performance.
+</Callout>
+
+---
+
+## Performance: The Re-render Problem
+
+When a context value changes, every component that calls `useContext` re-renders:
+
+```tsx
+// ❌ Problem: UserMenu re-renders when theme changes
+const AppContext = createContext({ user: null, theme: 'light' });
+
+function UserMenu() {
+  const { user } = useContext(AppContext); // Re-renders on ANY context change
+  return <div>{user?.name}</div>;
+}
+
+function ThemeToggle() {
+  const { theme } = useContext(AppContext);
+  return <button>{theme}</button>;
+}
+```
+
+When `theme` changes, `UserMenu` re-renders even though it only uses `user`.
+
+### Solution 1: Split Contexts
+
+```tsx
+// ✅ Separate contexts for separate concerns
+const UserContext = createContext<User | null>(null);
+const ThemeContext = createContext<Theme>('light');
+
+function UserMenu() {
+  const user = useContext(UserContext); // Only re-renders when user changes
+  return <div>{user?.name}</div>;
+}
+
+function ThemeToggle() {
+  const theme = useContext(ThemeContext); // Only re-renders when theme changes
+  return <button>{theme}</button>;
+}
+```
+
+### Solution 2: Split State and Dispatch
+
+For context with both state and actions, separate them:
+
+```tsx
+const StateContext = createContext<State | null>(null);
+const DispatchContext = createContext<Dispatch<Action> | null>(null);
+
+function Provider({ children }: { children: ReactNode }) {
+  const [state, dispatch] = useReducer(reducer, initialState);
+
+  return (
+    <StateContext.Provider value={state}>
+      <DispatchContext.Provider value={dispatch}>
+        {children}
+      </DispatchContext.Provider>
+    </StateContext.Provider>
+  );
+}
+
+// Components that only dispatch don't re-render when state changes
+function AddButton() {
+  const dispatch = useContext(DispatchContext)!;
+  return <button onClick={() => dispatch({ type: 'ADD' })}>Add</button>;
+}
+```
+
+### Solution 3: Memoize Provider Value
+
+If you can't split, memoize:
+
+```tsx
+function Provider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [theme, setTheme] = useState<Theme>('light');
+
+  // ❌ New object every render = unnecessary re-renders
+  const value = { user, theme, setUser, setTheme };
+
+  // ✅ Memoized = stable reference
+  const value = useMemo(
+    () => ({ user, theme, setUser, setTheme }),
+    [user, theme]
+  );
+
+  return (
+    <AppContext.Provider value={value}>
+      {children}
+    </AppContext.Provider>
+  );
+}
+```
+
+---
+
+## Context + useReducer
+
+For complex shared state, combine context with useReducer:
+
+```tsx
+type State = {
+  items: Item[];
+  filter: 'all' | 'active' | 'completed';
+};
+
+type Action =
+  | { type: 'ADD_ITEM'; text: string }
+  | { type: 'TOGGLE_ITEM'; id: string }
+  | { type: 'SET_FILTER'; filter: State['filter'] };
+
+const TodoStateContext = createContext<State | null>(null);
+const TodoDispatchContext = createContext<Dispatch<Action> | null>(null);
+
+function todoReducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'ADD_ITEM':
+      return {
+        ...state,
+        items: [...state.items, { id: crypto.randomUUID(), text: action.text, completed: false }],
+      };
+    case 'TOGGLE_ITEM':
+      return {
+        ...state,
+        items: state.items.map(item =>
+          item.id === action.id ? { ...item, completed: !item.completed } : item
+        ),
+      };
+    case 'SET_FILTER':
+      return { ...state, filter: action.filter };
+    default:
+      return state;
+  }
+}
+
+export function TodoProvider({ children }: { children: ReactNode }) {
+  const [state, dispatch] = useReducer(todoReducer, {
+    items: [],
+    filter: 'all',
+  });
+
+  return (
+    <TodoStateContext.Provider value={state}>
+      <TodoDispatchContext.Provider value={dispatch}>
+        {children}
+      </TodoDispatchContext.Provider>
+    </TodoStateContext.Provider>
+  );
+}
+
+export function useTodoState() {
+  const context = useContext(TodoStateContext);
+  if (!context) throw new Error('useTodoState must be within TodoProvider');
+  return context;
+}
+
+export function useTodoDispatch() {
+  const context = useContext(TodoDispatchContext);
+  if (!context) throw new Error('useTodoDispatch must be within TodoProvider');
+  return context;
+}
+```
+
+---
+
+## Nested Providers
+
+Providers can be nested; the closest one wins:
+
+```tsx
+<ThemeContext.Provider value="light">
+  <div>
+    Light theme here
+    <ThemeContext.Provider value="dark">
+      <div>Dark theme here</div>
+    </ThemeContext.Provider>
+  </div>
+</ThemeContext.Provider>
+```
+
+This is useful for:
+- Theming subsections differently
+- Providing scoped state (e.g., per-form)
+- Testing (wrap component in provider with test data)
+
+---
+
+## Context vs Props vs State Libraries
+
+| Need | Solution |
+|------|----------|
+| 2-3 levels of components | Props |
+| Many levels, rarely changes | Context |
+| Frequently changing global state | Zustand, Jotai |
+| Server data | React Query, SWR, Server Components |
+| Complex app state | Redux, Zustand |
+
+---
+
+## Summary
+
+Context solves prop drilling but comes with re-render costs:
+
+- Create custom hooks that throw on missing providers
+- Split contexts by how often they change
+- Separate state and dispatch for better performance
+- Combine with useReducer for complex state
+- Consider alternatives for frequently changing data
+
+<HookCard
+  name="useContext"
+  signature="const value = useContext(SomeContext)"
+  description="Subscribe to a context value. Re-renders when the context changes. Avoid for frequently changing data."
+  category="context"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Create a `NotificationProvider` that lets any component show toast notifications:
+
+```tsx
+const { notify } = useNotification();
+notify({ type: 'success', message: 'Saved!' });
+```
+
+### Core
+
+Build a shopping cart with context:
+- `CartProvider` wraps the app
+- `useCart()` returns `{ items, addItem, removeItem, total }`
+- Cart persists to localStorage
+- Optimized so product listings don't re-render when cart changes
+
+### Stretch
+
+Create a feature flag system:
+- `FeatureFlagProvider` fetches flags from an API
+- `useFeatureFlag('flag-name')` returns boolean
+- `<FeatureGate flag="new-ui">` conditionally renders children
+- Flags update in real-time via WebSocket
+- Include loading and error states

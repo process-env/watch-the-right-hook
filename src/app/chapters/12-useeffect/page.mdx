@@ -1,0 +1,467 @@
+# useEffect: Synchronization, Not Lifecycle
+
+`useEffect` is the most misunderstood hook. It's not `componentDidMount`. It's not a way to run code "after render." It's a way to synchronize your component with an external system. Get this mental model right and effects become simple.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Understand effects as synchronization, not lifecycle
+- Write effects with correct dependencies
+- Handle cleanup properly
+- Know when you don't need an effect
+- Debug common effect problems
+
+---
+
+## The Mental Model
+
+An effect synchronizes your component with something outside React:
+
+- A browser API (event listeners, timers, observers)
+- A third-party library (maps, charts, players)
+- A network connection (WebSockets, subscriptions)
+- The DOM (focus, scroll position, measurements)
+
+The pattern is always the same:
+
+```tsx
+useEffect(() => {
+  // Setup: Connect to the external system
+  const connection = createConnection(url);
+  connection.connect();
+
+  // Cleanup: Disconnect from the external system
+  return () => {
+    connection.disconnect();
+  };
+}, [url]); // Re-sync when url changes
+```
+
+<Callout type="tip" title="Think Synchronization">
+Ask "What external system am I syncing with?" If the answer is "nothing," you might not need an effect.
+</Callout>
+
+---
+
+## Anatomy of an Effect
+
+```tsx
+useEffect(() => {
+  // 1. Setup code runs after render commits to DOM
+
+  return () => {
+    // 2. Cleanup code runs before next effect or unmount
+  };
+}, [dependency1, dependency2]); // 3. Dependencies control when to re-sync
+```
+
+### Execution Timeline
+
+```
+Initial render:
+  Component renders → DOM updates → Browser paints → Effect runs (setup)
+
+Re-render (dependency changed):
+  Component renders → DOM updates → Browser paints → Cleanup runs → Effect runs (setup)
+
+Unmount:
+  Cleanup runs
+```
+
+---
+
+## Dependencies: The Contract
+
+Dependencies tell React when to re-synchronize. List every value from your component that the effect uses:
+
+```tsx
+function ChatRoom({ roomId, serverUrl }: Props) {
+  useEffect(() => {
+    const connection = createConnection(serverUrl, roomId);
+    connection.connect();
+    return () => connection.disconnect();
+  }, [serverUrl, roomId]); // Both values are used inside
+}
+```
+
+### The Rules
+
+1. **Include all values used inside the effect**
+2. **Don't lie about dependencies** (ESLint will warn you)
+3. **If a dependency changes too often, restructure the code**
+
+```tsx
+// ❌ Missing dependency - bug!
+useEffect(() => {
+  fetchData(userId);
+}, []); // userId not listed, effect won't re-run when it changes
+
+// ✅ Correct dependencies
+useEffect(() => {
+  fetchData(userId);
+}, [userId]);
+```
+
+---
+
+## Common Effect Patterns
+
+### Subscribing to Events
+
+```tsx
+function useWindowSize() {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setSize({ width: window.innerWidth, height: window.innerHeight });
+    };
+
+    handleResize(); // Set initial size
+    window.addEventListener('resize', handleResize);
+
+    return () => window.removeEventListener('resize', handleResize);
+  }, []); // Empty deps = sync once on mount
+
+  return size;
+}
+```
+
+### Fetching Data
+
+```tsx
+function UserProfile({ userId }: { userId: string }) {
+  const [user, setUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchUser() {
+      const response = await fetch(`/api/users/${userId}`);
+      const data = await response.json();
+
+      if (!cancelled) {
+        setUser(data);
+      }
+    }
+
+    fetchUser();
+
+    return () => {
+      cancelled = true; // Prevent state update if component unmounts
+    };
+  }, [userId]);
+
+  return user ? <div>{user.name}</div> : <div>Loading...</div>;
+}
+```
+
+### Timers and Intervals
+
+```tsx
+function Timer() {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCount(c => c + 1); // Functional update to avoid stale closure
+    }, 1000);
+
+    return () => clearInterval(id);
+  }, []); // Empty deps because we use functional update
+
+  return <div>{count}</div>;
+}
+```
+
+### Third-Party Libraries
+
+```tsx
+function Map({ center, zoom }: MapProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<MapLibrary | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    // Initialize
+    mapRef.current = new MapLibrary(containerRef.current, { center, zoom });
+
+    // Cleanup
+    return () => {
+      mapRef.current?.destroy();
+      mapRef.current = null;
+    };
+  }, []); // Initialize once
+
+  // Sync properties separately
+  useEffect(() => {
+    mapRef.current?.setCenter(center);
+  }, [center]);
+
+  useEffect(() => {
+    mapRef.current?.setZoom(zoom);
+  }, [zoom]);
+
+  return <div ref={containerRef} style={{ height: 400 }} />;
+}
+```
+
+---
+
+## Cleanup: Why It Matters
+
+Cleanup prevents:
+- Memory leaks (listeners, subscriptions not removed)
+- Stale updates (setting state after unmount)
+- Race conditions (old request finishing after new one)
+
+```tsx
+// ❌ No cleanup - memory leak
+useEffect(() => {
+  window.addEventListener('scroll', handleScroll);
+}, []);
+
+// ✅ With cleanup
+useEffect(() => {
+  window.addEventListener('scroll', handleScroll);
+  return () => window.removeEventListener('scroll', handleScroll);
+}, []);
+```
+
+### Cleanup Runs Before Each Re-sync
+
+```tsx
+useEffect(() => {
+  console.log('Connect to room:', roomId);
+  return () => console.log('Disconnect from room:', roomId);
+}, [roomId]);
+
+// User joins room "general", then switches to "random":
+// 1. Connect to room: general
+// 2. Disconnect from room: general  (cleanup before re-sync)
+// 3. Connect to room: random
+```
+
+---
+
+## When You Don't Need an Effect
+
+Effects are overused. Many things don't need them:
+
+### Transforming Data
+
+```tsx
+// ❌ Effect for derived state
+const [items, setItems] = useState([]);
+const [filteredItems, setFilteredItems] = useState([]);
+
+useEffect(() => {
+  setFilteredItems(items.filter(item => item.active));
+}, [items]);
+
+// ✅ Calculate during render
+const [items, setItems] = useState([]);
+const filteredItems = items.filter(item => item.active);
+```
+
+### Handling Events
+
+```tsx
+// ❌ Effect to respond to event
+const [query, setQuery] = useState('');
+
+useEffect(() => {
+  if (query) {
+    search(query);
+  }
+}, [query]);
+
+// ✅ Call in event handler
+const handleSearch = (e: React.FormEvent) => {
+  e.preventDefault();
+  search(query);
+};
+```
+
+### Initializing Global Singletons
+
+```tsx
+// ❌ Effect for one-time setup
+useEffect(() => {
+  initializeAnalytics();
+}, []);
+
+// ✅ Do it outside React
+initializeAnalytics();
+
+function App() {
+  // ...
+}
+```
+
+### Resetting State When Props Change
+
+```tsx
+// ❌ Effect to reset state
+useEffect(() => {
+  setComment('');
+}, [postId]);
+
+// ✅ Use key to remount
+<CommentForm key={postId} />
+```
+
+<Callout type="warning" title="The Effect Smell Test">
+If your effect just sets state based on props/state, you probably don't need it. Calculate during render or use event handlers.
+</Callout>
+
+---
+
+## Strict Mode and Double Effects
+
+In development with Strict Mode, React runs effects twice (mount → unmount → mount). This helps find bugs:
+
+```tsx
+useEffect(() => {
+  const connection = createConnection();
+  connection.connect();
+  return () => connection.disconnect();
+}, []);
+
+// In Strict Mode:
+// 1. connect()
+// 2. disconnect()
+// 3. connect()
+
+// If your effect isn't idempotent, you'll see bugs immediately
+```
+
+If double-running causes problems, your effect has a bug. Fix the effect, don't disable Strict Mode.
+
+---
+
+## Debugging Effects
+
+### Effect Runs Every Render
+
+Check if dependencies are stable:
+
+```tsx
+// ❌ New object every render
+useEffect(() => {
+  doSomething(options);
+}, [options]); // { a: 1 } !== { a: 1 }
+
+// ✅ Stable reference
+const options = useMemo(() => ({ a: 1 }), []);
+useEffect(() => {
+  doSomething(options);
+}, [options]);
+
+// ✅ Or list primitive values
+useEffect(() => {
+  doSomething({ a: 1 });
+}, []); // No dependency on object
+```
+
+### Effect Doesn't Run When Expected
+
+Ensure dependencies are listed:
+
+```tsx
+// ❌ Missing dep
+useEffect(() => {
+  console.log(count);
+}, []); // Won't log when count changes
+
+// ✅ Include dep
+useEffect(() => {
+  console.log(count);
+}, [count]);
+```
+
+### Infinite Loop
+
+Usually caused by setting state that's in dependencies:
+
+```tsx
+// ❌ Infinite loop
+useEffect(() => {
+  setCount(count + 1);
+}, [count]); // count changes → effect runs → count changes → ...
+
+// ✅ Functional update removes dependency
+useEffect(() => {
+  setCount(c => c + 1);
+}, []); // No dependency on count
+```
+
+---
+
+## Summary
+
+`useEffect` synchronizes your component with external systems:
+
+- **Setup**: Connect to the system
+- **Cleanup**: Disconnect from the system
+- **Dependencies**: When to re-synchronize
+
+It's not a lifecycle hook. It's not for derived state. It's for keeping React in sync with the world outside.
+
+<HookCard
+  name="useEffect"
+  signature="useEffect(() => { setup; return cleanup; }, [deps])"
+  description="Synchronize with external systems. Runs setup after render, cleanup before re-run or unmount. Dependencies control re-sync timing."
+  category="effect"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Fix the memory leak in this component:
+
+```tsx
+function MouseTracker() {
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const handleMove = (e: MouseEvent) => {
+      setPosition({ x: e.clientX, y: e.clientY });
+    };
+    window.addEventListener('mousemove', handleMove);
+  }, []);
+
+  return <div>Mouse: {position.x}, {position.y}</div>;
+}
+```
+
+### Core
+
+Build a `useDebounce` hook:
+
+```tsx
+const debouncedValue = useDebounce(searchTerm, 500);
+```
+
+- Returns the value after it hasn't changed for the delay period
+- Cleans up pending timeouts properly
+- Handles rapid changes correctly
+
+### Stretch
+
+Create a `useWebSocket` hook:
+
+```tsx
+const { messages, send, status } = useWebSocket(url);
+```
+
+- Connects on mount, disconnects on unmount
+- Reconnects if URL changes
+- Auto-reconnects on disconnect (with exponential backoff)
+- Tracks connection status ('connecting' | 'connected' | 'disconnected')
+- Queues messages sent while disconnected

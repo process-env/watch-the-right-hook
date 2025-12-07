@@ -1,0 +1,433 @@
+# useImperativeHandle & forwardRef: Controlled Escape Hatches
+
+Sometimes parent components need to call methods on children—focus an input, scroll a list, play a video. `forwardRef` and `useImperativeHandle` let you expose a controlled API to parents while hiding implementation details.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Forward refs to child components
+- Expose custom imperative methods to parents
+- Know when imperative handles are appropriate
+- Use the React 19 simplified ref prop pattern
+- Design clean imperative APIs
+
+---
+
+## The Problem: Refs Don't Pass Through
+
+By default, refs don't pass to child components:
+
+```tsx
+// ❌ Doesn't work: ref doesn't reach the input
+function MyInput(props: InputProps) {
+  return <input {...props} />;
+}
+
+function Form() {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return <MyInput ref={inputRef} />; // ref is not forwarded
+}
+```
+
+The `ref` prop is special—React doesn't pass it through like other props.
+
+---
+
+## forwardRef: Passing Refs Down
+
+`forwardRef` lets a component receive a ref and forward it to a child:
+
+```tsx
+import { forwardRef } from 'react';
+
+const MyInput = forwardRef<HTMLInputElement, InputProps>(
+  function MyInput(props, ref) {
+    return <input ref={ref} {...props} />;
+  }
+);
+
+function Form() {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleClick = () => {
+    inputRef.current?.focus(); // Works!
+  };
+
+  return (
+    <>
+      <MyInput ref={inputRef} placeholder="Enter text" />
+      <button onClick={handleClick}>Focus</button>
+    </>
+  );
+}
+```
+
+### TypeScript Signature
+
+```tsx
+const Component = forwardRef<RefType, PropsType>(
+  function Component(props, ref) {
+    return <element ref={ref} />;
+  }
+);
+```
+
+---
+
+## React 19: Refs as Props
+
+React 19 simplifies this—you can pass ref as a regular prop:
+
+```tsx
+// React 19: No forwardRef needed
+function MyInput({ ref, ...props }: InputProps & { ref?: React.Ref<HTMLInputElement> }) {
+  return <input ref={ref} {...props} />;
+}
+
+function Form() {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return <MyInput ref={inputRef} placeholder="Enter text" />;
+}
+```
+
+<Callout type="info" title="React 19 Feature">
+In React 19, `ref` is just a prop. You can destructure it and pass it along. `forwardRef` still works but is no longer required for most cases.
+</Callout>
+
+---
+
+## useImperativeHandle: Custom Ref APIs
+
+What if you don't want to expose the raw DOM element? `useImperativeHandle` lets you customize what the ref exposes:
+
+```tsx
+import { useRef, useImperativeHandle, forwardRef } from 'react';
+
+type InputHandle = {
+  focus: () => void;
+  scrollIntoView: () => void;
+};
+
+const FancyInput = forwardRef<InputHandle, InputProps>(
+  function FancyInput(props, ref) {
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    useImperativeHandle(ref, () => ({
+      focus() {
+        inputRef.current?.focus();
+      },
+      scrollIntoView() {
+        inputRef.current?.scrollIntoView({ behavior: 'smooth' });
+      },
+    }), []);
+
+    return <input ref={inputRef} {...props} />;
+  }
+);
+
+function Form() {
+  const inputRef = useRef<InputHandle>(null);
+
+  const handleClick = () => {
+    inputRef.current?.focus(); // Calls our custom focus method
+    // inputRef.current?.value - Not exposed!
+  };
+
+  return <FancyInput ref={inputRef} />;
+}
+```
+
+### Why Hide the DOM Element?
+
+1. **Encapsulation**: Parent can't access internals you don't expose
+2. **Stability**: You can change internal DOM structure without breaking parent code
+3. **Safety**: Prevent parents from doing dangerous things
+4. **Intent**: API shows what operations are supported
+
+---
+
+## Anatomy of useImperativeHandle
+
+```tsx
+useImperativeHandle(
+  ref,           // The ref from forwardRef
+  () => ({       // Factory function returning the handle
+    method1() { /* ... */ },
+    method2() { /* ... */ },
+  }),
+  [dependencies] // When to recreate the handle
+);
+```
+
+The factory function runs:
+- On mount
+- When dependencies change
+
+---
+
+## Real-World Examples
+
+### Video Player Component
+
+```tsx
+type VideoHandle = {
+  play: () => void;
+  pause: () => void;
+  seek: (time: number) => void;
+  getCurrentTime: () => number;
+};
+
+const VideoPlayer = forwardRef<VideoHandle, VideoProps>(
+  function VideoPlayer({ src, poster }, ref) {
+    const videoRef = useRef<HTMLVideoElement>(null);
+
+    useImperativeHandle(ref, () => ({
+      play() {
+        videoRef.current?.play();
+      },
+      pause() {
+        videoRef.current?.pause();
+      },
+      seek(time: number) {
+        if (videoRef.current) {
+          videoRef.current.currentTime = time;
+        }
+      },
+      getCurrentTime() {
+        return videoRef.current?.currentTime ?? 0;
+      },
+    }), []);
+
+    return <video ref={videoRef} src={src} poster={poster} />;
+  }
+);
+```
+
+### Form with Validation
+
+```tsx
+type FormHandle = {
+  submit: () => void;
+  reset: () => void;
+  validate: () => boolean;
+  getValues: () => FormValues;
+};
+
+const Form = forwardRef<FormHandle, FormProps>(
+  function Form({ children, onSubmit }, ref) {
+    const formRef = useRef<HTMLFormElement>(null);
+    const [values, setValues] = useState<FormValues>({});
+
+    useImperativeHandle(ref, () => ({
+      submit() {
+        formRef.current?.requestSubmit();
+      },
+      reset() {
+        formRef.current?.reset();
+        setValues({});
+      },
+      validate() {
+        return formRef.current?.checkValidity() ?? false;
+      },
+      getValues() {
+        return values;
+      },
+    }), [values]);
+
+    return (
+      <form ref={formRef} onSubmit={onSubmit}>
+        {children}
+      </form>
+    );
+  }
+);
+```
+
+### Scrollable List
+
+```tsx
+type ListHandle = {
+  scrollToItem: (index: number) => void;
+  scrollToTop: () => void;
+  scrollToBottom: () => void;
+};
+
+const ScrollableList = forwardRef<ListHandle, ListProps>(
+  function ScrollableList({ items }, ref) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+    useImperativeHandle(ref, () => ({
+      scrollToItem(index: number) {
+        itemRefs.current.get(index)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        });
+      },
+      scrollToTop() {
+        containerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+      scrollToBottom() {
+        const container = containerRef.current;
+        if (container) {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'smooth',
+          });
+        }
+      },
+    }), []);
+
+    return (
+      <div ref={containerRef} style={{ overflow: 'auto', height: 400 }}>
+        {items.map((item, index) => (
+          <div
+            key={item.id}
+            ref={node => {
+              if (node) itemRefs.current.set(index, node);
+              else itemRefs.current.delete(index);
+            }}
+          >
+            {item.content}
+          </div>
+        ))}
+      </div>
+    );
+  }
+);
+```
+
+---
+
+## When to Use Imperative Handles
+
+**Good use cases:**
+- Media controls (play, pause, seek)
+- Focus management
+- Scroll control
+- Animation triggers
+- Form submission/reset
+
+**Avoid when:**
+- You can use props instead (prefer declarative)
+- You're just passing through a DOM ref (use plain forwardRef)
+- It's for reading values (use callbacks or lifted state)
+
+```tsx
+// ❌ Imperative: Parent controls playback via ref
+<VideoPlayer ref={videoRef} />
+<button onClick={() => videoRef.current?.play()}>Play</button>
+
+// ✅ Declarative: Parent controls playback via props
+<VideoPlayer isPlaying={isPlaying} onEnded={handleEnded} />
+<button onClick={() => setIsPlaying(true)}>Play</button>
+```
+
+<Callout type="tip" title="Prefer Declarative">
+Imperative handles are escape hatches. If you can express the behavior through props, that's usually better. Use refs for operations that don't fit the declarative model (focus, scroll, media playback).
+</Callout>
+
+---
+
+## Combining with TypeScript
+
+Define clear types for your handles:
+
+```tsx
+// types.ts
+export type DialogHandle = {
+  open: () => void;
+  close: () => void;
+};
+
+// Dialog.tsx
+export const Dialog = forwardRef<DialogHandle, DialogProps>(
+  function Dialog({ children }, ref) {
+    const [isOpen, setIsOpen] = useState(false);
+
+    useImperativeHandle(ref, () => ({
+      open: () => setIsOpen(true),
+      close: () => setIsOpen(false),
+    }), []);
+
+    if (!isOpen) return null;
+    return <div className="dialog">{children}</div>;
+  }
+);
+
+// Usage
+const dialogRef = useRef<DialogHandle>(null);
+dialogRef.current?.open();
+```
+
+---
+
+## Summary
+
+`forwardRef` and `useImperativeHandle` provide controlled escape hatches:
+
+- **forwardRef**: Pass refs through components to DOM elements
+- **useImperativeHandle**: Expose custom methods instead of raw DOM
+- **React 19**: Refs can be passed as regular props
+- **Prefer declarative**: Use imperative handles only when necessary
+
+<HookCard
+  name="useImperativeHandle"
+  signature="useImperativeHandle(ref, () => ({ methods }), [deps])"
+  description="Customize the value exposed to parent refs. Use with forwardRef to create controlled imperative APIs."
+  category="ref"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Create a `FancyButton` that exposes a `flash()` method to briefly highlight the button:
+
+```tsx
+const buttonRef = useRef<{ flash: () => void }>(null);
+
+<FancyButton ref={buttonRef}>Click me</FancyButton>
+<button onClick={() => buttonRef.current?.flash()}>Flash it!</button>
+```
+
+### Core
+
+Build a `Carousel` component with imperative controls:
+
+```tsx
+type CarouselHandle = {
+  next: () => void;
+  prev: () => void;
+  goTo: (index: number) => void;
+  getCurrentIndex: () => number;
+};
+
+<Carousel ref={carouselRef} items={images} />
+```
+
+### Stretch
+
+Create a `Terminal` component that simulates a command-line interface:
+
+```tsx
+type TerminalHandle = {
+  write: (text: string) => void;
+  writeLine: (text: string) => void;
+  clear: () => void;
+  focus: () => void;
+  getHistory: () => string[];
+};
+```
+
+The terminal should:
+- Display output text
+- Accept keyboard input
+- Maintain command history
+- Support scrolling
+- Expose all methods via ref

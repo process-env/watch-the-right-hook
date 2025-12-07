@@ -1,0 +1,40 @@
+# Rules of the Ring
+
+Every hook you write must follow two rules. Break them and React breaks. These aren't suggestions—they're the contract that makes hooks work.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Understand the two Rules of Hooks and why they exist
+- Know what "purity" means for React components
+- Recognize common rule violations and how to fix them
+- Configure ESLint to catch violations automatically
+
+---
+
+## The Two Rules
+
+### Rule 1: Only Call Hooks at the Top Level
+
+Don't call hooks inside loops, conditions, or nested functions.
+
+### Rule 2: Only Call Hooks from React Functions
+
+Call hooks from React function components or custom hooks only.
+
+---
+
+## Component Purity
+
+A pure function:
+1. Same inputs → same outputs
+2. No side effects during execution
+
+React expects components to be pure during render. Side effects belong in effects, event handlers, and refs.
+
+---
+
+## Summary
+
+The Rules of Hooks aren't arbitrary—they're how React tracks state across renders. Call hooks at the top level, only from React functions, and keep your render pure.

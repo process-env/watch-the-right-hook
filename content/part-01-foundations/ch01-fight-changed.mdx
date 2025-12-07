@@ -1,0 +1,222 @@
+# The Fight Has Changed
+
+React in 2025 looks nothing like React in 2019. The mental models that served you well—lifecycle methods, class components, componentDidMount—are now historical footnotes. Modern React thinks differently.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Understand why React moved from classes to functions with hooks
+- Know the key differences between React 18, 19, and the React Compiler
+- Recognize when legacy patterns are holding you back
+- Have a mental model for how modern React renders
+
+---
+
+## From Classes to Functions
+
+React started with class components. You extended `React.Component`, defined lifecycle methods, and managed state with `this.setState()`. It worked, but it had problems.
+
+```tsx
+// The old way (don't write this anymore)
+class Counter extends React.Component {
+  state = { count: 0 };
+
+  componentDidMount() {
+    document.title = `Count: ${this.state.count}`;
+  }
+
+  componentDidUpdate() {
+    document.title = `Count: ${this.state.count}`;
+  }
+
+  render() {
+    return (
+      <button onClick={() => this.setState({ count: this.state.count + 1 })}>
+        {this.state.count}
+      </button>
+    );
+  }
+}
+```
+
+Three problems stood out:
+
+1. **Logic fragmentation**: Related code scattered across multiple lifecycle methods
+2. **The `this` problem**: Binding event handlers, understanding when `this` refers to what
+3. **Reuse difficulty**: Sharing stateful logic meant HOCs or render props—both awkward
+
+Hooks solved all three. The same component:
+
+```tsx
+function Counter() {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    document.title = `Count: ${count}`;
+  }, [count]);
+
+  return <button onClick={() => setCount(count + 1)}>{count}</button>;
+}
+```
+
+The logic is together. No `this`. And you can extract it:
+
+```tsx
+function useDocumentTitle(title: string) {
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
+}
+
+function Counter() {
+  const [count, setCount] = useState(0);
+  useDocumentTitle(`Count: ${count}`);
+
+  return <button onClick={() => setCount(count + 1)}>{count}</button>;
+}
+```
+
+<Callout type="tip" title="Key Insight">
+Hooks let you organize code by *what it does*, not *when it runs*. This is the fundamental shift in React's mental model.
+</Callout>
+
+---
+
+## The React 18 → 19 → Compiler Timeline
+
+Understanding where React is now requires knowing where it came from.
+
+### React 18 (2022): Concurrent Rendering
+
+React 18 introduced:
+
+- **Automatic batching**: Multiple state updates in one render
+- **Transitions**: `useTransition` and `startTransition` for non-urgent updates
+- **Suspense improvements**: Better loading states
+- **Streaming SSR**: Send HTML as it's ready
+
+The big idea: React can now *interrupt* rendering. If something more important comes up (like user input), React can pause what it's doing and handle the priority.
+
+### React 19 (2024): Actions and the `use` Hook
+
+React 19 brought:
+
+- **Server Components**: Components that run only on the server
+- **Actions**: `useActionState`, `useFormStatus`, `useOptimistic`
+- **The `use` hook**: Read promises and context in new ways
+- **Improved ref handling**: Refs as props without `forwardRef`
+
+The big idea: React now understands the request/response cycle. Forms, mutations, and data fetching are first-class concepts.
+
+### React Compiler (2024+): Automatic Optimization
+
+The React Compiler (formerly "React Forget") auto-memoizes your components. It analyzes your code and inserts `useMemo` and `useCallback` where needed.
+
+What this means for you:
+
+- You can stop writing `useMemo` and `useCallback` in most cases
+- Your code gets simpler
+- Performance is handled automatically
+
+<Callout type="warning" title="Not Magic">
+The compiler requires your code to follow React's rules. If your components have side effects during render or mutate objects unexpectedly, the compiler can't help you—and might break things.
+</Callout>
+
+---
+
+## How Modern React Renders
+
+To use hooks well, you need a mental model of rendering.
+
+A React component is a function. When React needs to show your UI, it calls your function. Your function returns JSX describing what to render. React compares that JSX to what's already on screen and updates the DOM.
+
+```
+User clicks button
+      ↓
+Event handler calls setState
+      ↓
+React schedules a re-render
+      ↓
+React calls your component function
+      ↓
+Your function runs hooks in order
+      ↓
+Your function returns JSX
+      ↓
+React diffs the JSX with the DOM
+      ↓
+React updates only what changed
+```
+
+Key points:
+
+1. **Components are functions that run repeatedly**. Every state change means your function runs again.
+
+2. **Hooks remember things between renders**. `useState` keeps your count, `useRef` keeps your DOM reference, `useEffect` keeps your cleanup function.
+
+3. **Each render is a snapshot**. The values you see in your component are from *this* render. They don't change mid-render.
+
+4. **Effects run after the render commits**. The browser paints first, then effects fire.
+
+---
+
+## What Legacy Patterns to Abandon
+
+If you're coming from class components or older React patterns, here's what to let go of:
+
+### Stop Using
+
+- **Class components** for new code
+- **componentDidMount/Update/Unmount** thinking
+- **Higher-Order Components (HOCs)** when hooks work
+- **Render props** when hooks work
+- **Manual `shouldComponentUpdate`** (the compiler handles this)
+- **`this.setState` callbacks** (use effects instead)
+
+### Start Using
+
+- **Function components** exclusively
+- **Custom hooks** for shared logic
+- **Server Components** when you don't need interactivity
+- **Actions** for form handling and mutations
+- **Suspense** for loading states
+
+<Callout type="info" title="Migration Note">
+You don't have to rewrite your whole codebase. Class components still work. But new code should use functions and hooks.
+</Callout>
+
+---
+
+## Summary
+
+React has evolved from a library about rendering UI to a framework that understands the full request/response cycle. The shift from classes to functions, from lifecycle methods to hooks, from manual optimization to automatic compilation—these aren't just API changes. They're changes in how you think about building UIs.
+
+The rest of this book teaches you to think in hooks. We'll start with the rules you must follow, then move through each hook category: state, effects, refs, context, and performance. By the end, you'll write React the way React wants to be written.
+
+<HookCard
+  name="This Chapter"
+  signature="React 18 → 19 → Compiler"
+  description="Modern React is concurrent, server-aware, and automatically optimized. Your job is to follow the rules and let React do the rest."
+  category="state"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Take a class component from your codebase (or find one online) and convert it to a function component with hooks. Notice where the lifecycle methods map to `useEffect`.
+
+### Core
+
+Create a custom hook called `useWindowSize` that tracks the browser window dimensions. It should:
+
+1. Return `{ width, height }`
+2. Update when the window resizes
+3. Clean up the event listener on unmount
+
+### Stretch
+
+Build a `usePrevious` hook that returns the previous value of any variable. Think about when the ref updates relative to the render.

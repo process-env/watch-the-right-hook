@@ -1,0 +1,21 @@
+# Choosing the Right Hook
+
+The RIGHT framework for selecting hooks:
+
+- **R**ender: Does this value affect what gets rendered?
+- **I**dentity: Does this value need to persist across renders?
+- **G**lobal: Is this value shared across components?
+- **H**andler: Is this triggered by an event or side effect?
+- **T**iming: When does this need to run?
+
+## Quick Reference
+
+| I need to... | Use this hook |
+|--------------|---------------|
+| Store UI state | `useState` |
+| Store complex state | `useReducer` |
+| Store non-UI value | `useRef` |
+| Share state deeply | `useContext` |
+| Run side effect | `useEffect` |
+| Cache calculation | `useMemo` |
+| Handle form | `useActionState` |

@@ -1,0 +1,419 @@
+# useSyncExternalStore: Living with External State
+
+Not all state lives in React. Browser APIs, third-party libraries, global stores—these exist outside React's world. `useSyncExternalStore` bridges the gap, letting you subscribe to external data sources safely.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Understand what "external store" means and why it needs special handling
+- Use useSyncExternalStore to subscribe to any data source
+- Handle server-side rendering with getServerSnapshot
+- Know when to use this hook vs. useEffect + useState
+- Build custom hooks for browser APIs
+
+---
+
+## The Problem with External State
+
+External state lives outside React. It changes without React knowing. If you read it during render, you might get inconsistent values—especially with concurrent rendering.
+
+```tsx
+// ❌ Dangerous: Reading external state directly
+function WindowWidth() {
+  // This value could change mid-render in concurrent mode
+  return <div>Width: {window.innerWidth}</div>;
+}
+
+// ❌ Also dangerous: useEffect + useState has timing issues
+function WindowWidth() {
+  const [width, setWidth] = useState(window.innerWidth);
+
+  useEffect(() => {
+    const handler = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+
+  // Between render and effect, width could be stale
+  return <div>Width: {width}</div>;
+}
+```
+
+`useSyncExternalStore` solves this by integrating external subscriptions into React's rendering cycle.
+
+---
+
+## The Basics
+
+```tsx
+const snapshot = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot?);
+```
+
+- `subscribe`: Function that subscribes to the store and returns an unsubscribe function
+- `getSnapshot`: Function that returns the current value
+- `getServerSnapshot`: Optional function for server-side rendering
+
+```tsx
+function useWindowWidth() {
+  return useSyncExternalStore(
+    // Subscribe to changes
+    (callback) => {
+      window.addEventListener('resize', callback);
+      return () => window.removeEventListener('resize', callback);
+    },
+    // Get current value
+    () => window.innerWidth,
+    // Server value (no window on server)
+    () => 0
+  );
+}
+
+function WindowWidth() {
+  const width = useWindowWidth();
+  return <div>Width: {width}</div>;
+}
+```
+
+---
+
+## How It Works
+
+1. React calls `getSnapshot()` during render to get the current value
+2. React calls `subscribe()` after commit to listen for changes
+3. When the store changes, your callback fires
+4. React calls `getSnapshot()` again to check if the value changed
+5. If different, React re-renders
+
+<Callout type="info" title="Snapshot Comparison">
+React compares snapshots with `Object.is`. If your getSnapshot returns a new object each time, you'll get infinite re-renders. Return stable references or primitive values.
+</Callout>
+
+---
+
+## Browser API Examples
+
+### Online Status
+
+```tsx
+function useOnlineStatus() {
+  return useSyncExternalStore(
+    (callback) => {
+      window.addEventListener('online', callback);
+      window.addEventListener('offline', callback);
+      return () => {
+        window.removeEventListener('online', callback);
+        window.removeEventListener('offline', callback);
+      };
+    },
+    () => navigator.onLine,
+    () => true // Assume online during SSR
+  );
+}
+
+function OnlineIndicator() {
+  const isOnline = useOnlineStatus();
+  return <span>{isOnline ? '🟢 Online' : '🔴 Offline'}</span>;
+}
+```
+
+### LocalStorage
+
+```tsx
+function useLocalStorage<T>(key: string, initialValue: T) {
+  const getSnapshot = () => {
+    const item = localStorage.getItem(key);
+    return item ? JSON.parse(item) : initialValue;
+  };
+
+  const subscribe = (callback: () => void) => {
+    // Listen for changes from other tabs
+    const handler = (e: StorageEvent) => {
+      if (e.key === key) callback();
+    };
+    window.addEventListener('storage', handler);
+    return () => window.removeEventListener('storage', handler);
+  };
+
+  const value = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => initialValue
+  );
+
+  const setValue = (newValue: T) => {
+    localStorage.setItem(key, JSON.stringify(newValue));
+    // Trigger update in current tab
+    window.dispatchEvent(new StorageEvent('storage', { key }));
+  };
+
+  return [value, setValue] as const;
+}
+```
+
+### Media Queries
+
+```tsx
+function useMediaQuery(query: string) {
+  const subscribe = (callback: () => void) => {
+    const mql = window.matchMedia(query);
+    mql.addEventListener('change', callback);
+    return () => mql.removeEventListener('change', callback);
+  };
+
+  const getSnapshot = () => window.matchMedia(query).matches;
+
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => false // Default for SSR
+  );
+}
+
+function DarkModeToggle() {
+  const prefersDark = useMediaQuery('(prefers-color-scheme: dark)');
+  return <span>System prefers: {prefersDark ? 'dark' : 'light'}</span>;
+}
+```
+
+---
+
+## External Libraries
+
+### Redux Store
+
+```tsx
+import { useStore } from 'react-redux';
+
+// Redux already uses useSyncExternalStore internally
+// But here's how you'd do it manually:
+
+function useReduxSelector<T>(selector: (state: RootState) => T) {
+  const store = useStore();
+
+  return useSyncExternalStore(
+    store.subscribe,
+    () => selector(store.getState()),
+    () => selector(store.getState())
+  );
+}
+```
+
+### Zustand Store
+
+```tsx
+import { create } from 'zustand';
+
+// Zustand handles this for you, but the pattern is:
+const useStore = create((set) => ({
+  count: 0,
+  increment: () => set((state) => ({ count: state.count + 1 })),
+}));
+
+// Under the hood, Zustand uses useSyncExternalStore
+```
+
+### Custom Event Emitter
+
+```tsx
+class Store<T> {
+  private value: T;
+  private listeners = new Set<() => void>();
+
+  constructor(initialValue: T) {
+    this.value = initialValue;
+  }
+
+  getValue = () => this.value;
+
+  setValue = (newValue: T) => {
+    this.value = newValue;
+    this.listeners.forEach(listener => listener());
+  };
+
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+}
+
+const counterStore = new Store(0);
+
+function useCounter() {
+  return useSyncExternalStore(
+    counterStore.subscribe,
+    counterStore.getValue,
+    counterStore.getValue
+  );
+}
+```
+
+---
+
+## Server-Side Rendering
+
+The third argument, `getServerSnapshot`, is called during SSR when `window` doesn't exist.
+
+```tsx
+function useWindowWidth() {
+  return useSyncExternalStore(
+    (callback) => {
+      window.addEventListener('resize', callback);
+      return () => window.removeEventListener('resize', callback);
+    },
+    () => window.innerWidth,
+    () => 1024 // Reasonable default for SSR
+  );
+}
+```
+
+<Callout type="warning" title="Hydration Mismatch">
+If server and client snapshots differ, React will show a hydration warning. This is expected for values like `window.innerWidth`. To suppress it, you can:
+1. Accept the mismatch for dynamic values
+2. Render a placeholder during SSR
+3. Use `suppressHydrationWarning`
+</Callout>
+
+---
+
+## Avoiding Common Mistakes
+
+### Don't Return New Objects
+
+```tsx
+// ❌ Creates new object every time, infinite loop
+const getSnapshot = () => ({
+  width: window.innerWidth,
+  height: window.innerHeight,
+});
+
+// ✅ Cache the object, only update when values change
+let cachedDimensions = { width: 0, height: 0 };
+
+const getSnapshot = () => {
+  const newWidth = window.innerWidth;
+  const newHeight = window.innerHeight;
+
+  if (cachedDimensions.width !== newWidth || cachedDimensions.height !== newHeight) {
+    cachedDimensions = { width: newWidth, height: newHeight };
+  }
+
+  return cachedDimensions;
+};
+```
+
+### Don't Subscribe During Render
+
+```tsx
+// ❌ Creates new function every render
+function Component() {
+  const value = useSyncExternalStore(
+    (cb) => window.addEventListener('resize', cb), // New function!
+    () => window.innerWidth
+  );
+}
+
+// ✅ Stable function reference
+const subscribe = (callback: () => void) => {
+  window.addEventListener('resize', callback);
+  return () => window.removeEventListener('resize', callback);
+};
+
+function Component() {
+  const value = useSyncExternalStore(
+    subscribe,
+    () => window.innerWidth
+  );
+}
+```
+
+### Handle Missing APIs
+
+```tsx
+function useGeolocation() {
+  const subscribe = (callback: () => void) => {
+    if (!('geolocation' in navigator)) return () => {};
+
+    const id = navigator.geolocation.watchPosition(callback, callback);
+    return () => navigator.geolocation.clearWatch(id);
+  };
+
+  const getSnapshot = () => {
+    // Return cached position or null
+    return cachedPosition;
+  };
+
+  return useSyncExternalStore(subscribe, getSnapshot, () => null);
+}
+```
+
+---
+
+## When to Use What
+
+| Situation | Hook |
+|-----------|------|
+| React state | `useState` / `useReducer` |
+| Browser API subscription | `useSyncExternalStore` |
+| Third-party store (Redux, Zustand) | Library's hook (uses useSyncExternalStore internally) |
+| One-time read of external value | `useEffect` + `useState` is fine |
+| Frequent updates from external source | `useSyncExternalStore` |
+
+---
+
+## Summary
+
+`useSyncExternalStore` is the safe way to subscribe to data outside React:
+
+- Integrates with concurrent rendering
+- Handles subscription lifecycle correctly
+- Supports server-side rendering
+- Prevents tearing (inconsistent reads during render)
+
+Most developers won't use it directly—libraries like Redux and Zustand use it internally. But when you need to subscribe to browser APIs or custom stores, it's the right tool.
+
+<HookCard
+  name="useSyncExternalStore"
+  signature="useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot?)"
+  description="Subscribe to external data sources safely. Returns the current snapshot and re-renders when the store changes."
+  category="state"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Create a `useDocumentVisibility` hook that returns whether the document is visible:
+
+```tsx
+const isVisible = useDocumentVisibility();
+// true when tab is active, false when hidden
+```
+
+### Core
+
+Build a `useHistoryState` hook that syncs with browser history:
+
+```tsx
+const [state, setState] = useHistoryState({ page: 1 });
+// setState pushes to history
+// Back/forward buttons update state
+```
+
+### Stretch
+
+Create a `useBroadcastChannel` hook for cross-tab communication:
+
+```tsx
+const [message, postMessage] = useBroadcastChannel('my-channel');
+
+// postMessage('hello') sends to other tabs
+// message is the last received message
+```
+
+The hook should handle:
+- Creating/closing the channel
+- Sending and receiving messages
+- SSR (BroadcastChannel doesn't exist on server)

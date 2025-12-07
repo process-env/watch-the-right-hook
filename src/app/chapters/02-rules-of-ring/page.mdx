@@ -1,0 +1,437 @@
+# Rules of the Ring
+
+Every hook you write must follow two rules. Break them and React breaks. These aren't suggestions—they're the contract that makes hooks work.
+
+## Learning Outcomes
+
+After reading this chapter, you will:
+
+- Understand the two Rules of Hooks and why they exist
+- Know what "purity" means for React components
+- Recognize common rule violations and how to fix them
+- Configure ESLint to catch violations automatically
+
+---
+
+## The Two Rules
+
+### Rule 1: Only Call Hooks at the Top Level
+
+Don't call hooks inside loops, conditions, or nested functions.
+
+```tsx
+// ❌ WRONG: Hook inside condition
+function Profile({ userId }) {
+  if (userId) {
+    const [user, setUser] = useState(null); // Breaks!
+  }
+  // ...
+}
+
+// ✅ RIGHT: Hook at top level, condition inside
+function Profile({ userId }) {
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    if (userId) {
+      fetchUser(userId).then(setUser);
+    }
+  }, [userId]);
+  // ...
+}
+```
+
+```tsx
+// ❌ WRONG: Hook inside loop
+function UserList({ userIds }) {
+  const users = userIds.map(id => {
+    const [user] = useState(null); // Breaks!
+    return user;
+  });
+}
+
+// ✅ RIGHT: Create a child component
+function UserList({ userIds }) {
+  return userIds.map(id => <UserItem key={id} userId={id} />);
+}
+
+function UserItem({ userId }) {
+  const [user, setUser] = useState(null);
+  // ...
+}
+```
+
+**Why?** React tracks hooks by their call order. If you call `useState` three times, React knows "first call = first state, second call = second state." If a condition skips a hook call, the order breaks and React returns the wrong state to the wrong hook.
+
+<Callout type="danger" title="The Order Matters">
+React doesn't know your hooks by name. It knows them by position. First hook called gets slot 1, second gets slot 2. Skip a call and everything shifts.
+</Callout>
+
+### Rule 2: Only Call Hooks from React Functions
+
+Call hooks from:
+- React function components
+- Custom hooks (functions starting with `use`)
+
+Don't call hooks from:
+- Regular JavaScript functions
+- Class components
+- Event handlers (directly)
+
+```tsx
+// ❌ WRONG: Hook in regular function
+function getUser() {
+  const [user] = useState(null); // Not a component!
+  return user;
+}
+
+// ✅ RIGHT: Hook in custom hook
+function useUser() {
+  const [user, setUser] = useState(null);
+  return user;
+}
+
+// ✅ RIGHT: Hook in component
+function Profile() {
+  const [user, setUser] = useState(null);
+  return <div>{user?.name}</div>;
+}
+```
+
+**Why?** React only tracks hooks within its render cycle. A regular function could be called anywhere—React wouldn't know when to run effects or update state.
+
+---
+
+## Component Purity
+
+Beyond the two rules, React expects your components to be "pure" during render.
+
+### What Purity Means
+
+A pure function:
+1. **Same inputs → same outputs**: Given the same props and state, return the same JSX
+2. **No side effects**: Don't change anything outside the function during render
+
+```tsx
+// ❌ IMPURE: Mutates external variable during render
+let renderCount = 0;
+
+function Counter() {
+  renderCount++; // Side effect during render!
+  return <div>Rendered {renderCount} times</div>;
+}
+
+// ❌ IMPURE: Different output for same input
+function RandomGreeting({ name }) {
+  const greetings = ['Hello', 'Hi', 'Hey'];
+  const greeting = greetings[Math.floor(Math.random() * 3)]; // Random during render!
+  return <div>{greeting}, {name}</div>;
+}
+```
+
+```tsx
+// ✅ PURE: Same input always gives same output
+function Greeting({ name }) {
+  return <div>Hello, {name}</div>;
+}
+
+// ✅ PURE: Mutation is local
+function TodoList({ todos }) {
+  const sorted = [...todos].sort((a, b) => a.date - b.date); // Copy first, then mutate
+  return <ul>{sorted.map(t => <li key={t.id}>{t.text}</li>)}</ul>;
+}
+```
+
+### Why Purity Matters
+
+1. **Server Components**: Your component might render on the server. Side effects during render could run in the wrong environment.
+
+2. **Concurrent Rendering**: React might start rendering, pause, then throw away the work. Side effects during render could run multiple times or not at all.
+
+3. **React Compiler**: The compiler assumes purity to optimize your code. Break purity and the compiler generates broken code.
+
+<Callout type="warning" title="Render vs. Commit">
+"During render" means while your function is executing to produce JSX. Effects, event handlers, and refs run *after* render—those are fine for side effects.
+</Callout>
+
+---
+
+## What You Can and Can't Do During Render
+
+### Safe During Render
+
+- Read props and state
+- Calculate derived values
+- Create new objects and arrays (locally)
+- Call pure functions
+- Return JSX
+
+```tsx
+function ProductCard({ product, taxRate }) {
+  // ✅ All of this is fine during render
+  const price = product.price;
+  const tax = price * taxRate;
+  const total = price + tax;
+  const formatted = `$${total.toFixed(2)}`;
+
+  return (
+    <div>
+      <h2>{product.name}</h2>
+      <p>{formatted}</p>
+    </div>
+  );
+}
+```
+
+### Unsafe During Render
+
+- Mutate variables outside the component
+- Make network requests
+- Set timers
+- Directly manipulate the DOM
+- Write to localStorage
+- Generate random numbers (unless seeded)
+- Read the current time (unless passed as prop)
+
+```tsx
+// ❌ All of these break purity
+function BadComponent() {
+  fetch('/api/data');                    // Network request
+  localStorage.setItem('key', 'value');  // Storage write
+  document.title = 'New Title';          // DOM mutation
+  someGlobalArray.push('item');          // External mutation
+
+  return <div />;
+}
+
+// ✅ Move side effects to useEffect
+function GoodComponent() {
+  useEffect(() => {
+    fetch('/api/data');
+    localStorage.setItem('key', 'value');
+    document.title = 'New Title';
+  }, []);
+
+  return <div />;
+}
+```
+
+---
+
+## ESLint Configuration
+
+The `eslint-plugin-react-hooks` package catches most rule violations. Your project should already have it (Next.js includes it by default).
+
+The plugin enforces:
+- **`rules-of-hooks`**: Catches conditional/loop hook calls
+- **`exhaustive-deps`**: Warns about missing effect dependencies
+
+```json
+// eslint.config.js or .eslintrc
+{
+  "plugins": ["react-hooks"],
+  "rules": {
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "warn"
+  }
+}
+```
+
+<Callout type="tip" title="Trust the Linter">
+When ESLint warns about a missing dependency, it's almost always right. The fix is rarely to disable the warning—it's to restructure your code.
+</Callout>
+
+---
+
+## Common Violations and Fixes
+
+### Early Return Before Hooks
+
+```tsx
+// ❌ Hook after early return
+function Profile({ user }) {
+  if (!user) {
+    return <div>Loading...</div>;
+  }
+
+  const [editing, setEditing] = useState(false); // Sometimes skipped!
+  // ...
+}
+
+// ✅ Hooks before any returns
+function Profile({ user }) {
+  const [editing, setEditing] = useState(false);
+
+  if (!user) {
+    return <div>Loading...</div>;
+  }
+  // ...
+}
+```
+
+### Conditional Hook Calls
+
+```tsx
+// ❌ Hook in condition
+function Dashboard({ showAnalytics }) {
+  if (showAnalytics) {
+    const data = useAnalytics(); // Sometimes called, sometimes not
+  }
+}
+
+// ✅ Always call, conditionally use
+function Dashboard({ showAnalytics }) {
+  const data = useAnalytics(); // Always called
+
+  return (
+    <div>
+      {showAnalytics && <Analytics data={data} />}
+    </div>
+  );
+}
+
+// ✅ Or extract to separate component
+function Dashboard({ showAnalytics }) {
+  return (
+    <div>
+      {showAnalytics && <AnalyticsPanel />}
+    </div>
+  );
+}
+
+function AnalyticsPanel() {
+  const data = useAnalytics(); // Own component, own hooks
+  return <Analytics data={data} />;
+}
+```
+
+### Hooks in Callbacks
+
+```tsx
+// ❌ Hook in event handler
+function Form() {
+  const handleSubmit = () => {
+    const [status, setStatus] = useState('idle'); // Not allowed!
+  };
+}
+
+// ✅ Hook at component level
+function Form() {
+  const [status, setStatus] = useState('idle');
+
+  const handleSubmit = () => {
+    setStatus('submitting');
+    // ...
+  };
+}
+```
+
+---
+
+## The Mental Model
+
+Think of hooks as **slots** in a fixed-size array. Each render, React walks through your component and fills the slots in order:
+
+```
+Render 1:
+  Slot 0 ← useState(0)         → { value: 0, setter: fn }
+  Slot 1 ← useState('hello')   → { value: 'hello', setter: fn }
+  Slot 2 ← useEffect(fn, [])   → { cleanup: null, deps: [] }
+
+Render 2:
+  Slot 0 ← useState(0)         → { value: 5, setter: fn }      // Updated!
+  Slot 1 ← useState('hello')   → { value: 'world', setter: fn } // Updated!
+  Slot 2 ← useEffect(fn, [])   → { cleanup: fn, deps: [] }
+```
+
+If render 2 skips a hook call, the slots shift:
+
+```
+Render 2 (BROKEN):
+  Slot 0 ← useState(0)         → { value: 'world', setter: fn }  // WRONG!
+  Slot 1 ← useEffect(fn, [])   → ERROR: expected object, got function
+```
+
+This is why the order must be identical every render.
+
+---
+
+## Summary
+
+The Rules of Hooks aren't arbitrary—they're how React tracks state across renders. Call hooks at the top level, only from React functions, and keep your render pure. The ESLint plugin catches most mistakes, but understanding *why* helps you write correct code from the start.
+
+<HookCard
+  name="Rules of Hooks"
+  signature="1. Top level only  2. React functions only"
+  description="React tracks hooks by call order. Conditions and loops break that order. Keep renders pure—side effects go in effects."
+  category="state"
+/>
+
+---
+
+## Exercises
+
+### Warm-up
+
+Find the rule violation in this component and fix it:
+
+```tsx
+function SearchResults({ query }) {
+  if (!query) {
+    return <div>Enter a search term</div>;
+  }
+
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    search(query).then(r => {
+      setResults(r);
+      setLoading(false);
+    });
+  }, [query]);
+
+  return loading ? <Spinner /> : <ResultList results={results} />;
+}
+```
+
+### Core
+
+Refactor this component to follow the rules. It has multiple violations:
+
+```tsx
+let globalCache = {};
+
+function UserProfile({ userId, showDetails }) {
+  if (globalCache[userId]) {
+    return <CachedProfile data={globalCache[userId]} />;
+  }
+
+  if (showDetails) {
+    const details = useUserDetails(userId);
+  }
+
+  const [user, setUser] = useState(null);
+
+  fetch(`/api/users/${userId}`)
+    .then(r => r.json())
+    .then(data => {
+      globalCache[userId] = data;
+      setUser(data);
+    });
+
+  return user ? <Profile user={user} details={details} /> : <Loading />;
+}
+```
+
+### Stretch
+
+Create a custom hook `useConditionalEffect` that runs an effect only when a condition is true, but still follows the Rules of Hooks. The API should be:
+
+```tsx
+useConditionalEffect(
+  () => { /* effect */ },
+  [deps],
+  shouldRun // boolean
+);
+```
